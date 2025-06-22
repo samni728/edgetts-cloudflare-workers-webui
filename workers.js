@@ -87,6 +87,14 @@ async function handleSpeechRequest(request) {
     const finalCleaningOptions = { remove_markdown: true, remove_emoji: true, remove_urls: true, remove_line_breaks: true, remove_citation_numbers: true, custom_keywords: "", ...cleaning_options };
     const cleanedInput = cleanText(input, finalCleaningOptions);
 
+    const MAX_SUBREQUESTS = 48;
+    let finalChunkSize = chunk_size;
+    let finalConcurrency = Math.min(concurrency, MAX_SUBREQUESTS);
+    const estimatedChunks = Math.ceil(cleanedInput.length / finalChunkSize);
+    if (estimatedChunks > MAX_SUBREQUESTS) {
+        finalChunkSize = Math.ceil(cleanedInput.length / MAX_SUBREQUESTS);
+    }
+
     const modelVoice = OPENAI_VOICE_MAP[model.replace('tts-1-', '')] || OPENAI_VOICE_MAP[voice];
     const finalVoice = modelVoice || voice;
     
@@ -94,13 +102,13 @@ async function handleSpeechRequest(request) {
     const finalPitch = ((pitch - 1) * 100).toFixed(0);
     const outputFormat = "audio-24khz-48kbitrate-mono-mp3";
 
-    const textChunks = smartChunkText(cleanedInput, chunk_size);
+    const textChunks = smartChunkText(cleanedInput, finalChunkSize);
     const ttsArgs = [finalVoice, rate, finalPitch, style, outputFormat];
 
     if (stream) {
-        return await streamVoice(textChunks, concurrency, ...ttsArgs);
+        return await streamVoice(textChunks, finalConcurrency, ...ttsArgs);
     } else {
-        return await getVoice(textChunks, concurrency, ...ttsArgs);
+        return await getVoice(textChunks, finalConcurrency, ...ttsArgs);
     }
 }
 

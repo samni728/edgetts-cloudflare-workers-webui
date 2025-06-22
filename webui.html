@@ -307,6 +307,9 @@
 
       <div id="status"></div>
       <audio id="audioPlayer" controls></audio>
+      <div style="margin-top:1rem;text-align:center;">
+        <a id="downloadLink" href="#" download="speech.mp3" style="display:none;">下载音频</a>
+      </div>
 
       <details id="curl-details" style="margin-top: 2rem">
         <summary>cURL 命令示例 (固定格式)</summary>
@@ -350,6 +353,7 @@
           customKeywords: document.getElementById("customKeywords"),
           curlBox: document.querySelector("#curl-box code"),
           copyCurl: document.getElementById("copy-curl"),
+          downloadLink: document.getElementById("downloadLink"),
         };
 
         const updateCharCount = () =>
@@ -383,6 +387,23 @@
           generateSpeech(true)
         );
         elements.copyCurl.addEventListener("click", copyCurlToClipboard);
+
+        function splitInputText(text) {
+          const firstLimit = 13000;
+          const nextLimit = 5000;
+          if (text.length <= firstLimit) return [text];
+          const parts = [text.slice(0, firstLimit)];
+          let remain = text.slice(firstLimit);
+          while (remain.length > 0) {
+            parts.push(remain.slice(0, nextLimit));
+            remain = remain.slice(nextLimit);
+          }
+          return parts;
+        }
+
+        function sleep(ms) {
+          return new Promise((r) => setTimeout(r, ms));
+        }
 
         function copyCurlToClipboard() {
           navigator.clipboard
@@ -421,26 +442,34 @@
             return;
           }
 
-          const requestBody = getRequestBody();
-          requestBody.stream = isStream;
+          const parts = splitInputText(text);
+          const baseBody = getRequestBody();
+          baseBody.stream = isStream;
 
           elements.audioPlayer.style.display = "none";
           elements.audioPlayer.src = "";
+          elements.downloadLink.style.display = "none";
           updateStatus("正在连接服务器...", "info");
+
+          const buffers = [];
 
           try {
             if (isStream) {
-              await playStreamWithMSE(baseUrl, apiKey, requestBody);
+              await playStreamChunks(baseUrl, apiKey, baseBody, parts, buffers);
             } else {
-              await playStandard(baseUrl, apiKey, requestBody);
+              await playStandardChunks(baseUrl, apiKey, baseBody, parts, buffers);
             }
+            const finalBlob = new Blob(buffers, { type: "audio/mpeg" });
+            const url = URL.createObjectURL(finalBlob);
+            elements.downloadLink.href = url;
+            elements.downloadLink.style.display = "inline";
           } catch (error) {
             console.error("Error generating speech:", error);
             updateStatus(`错误: ${error.message}`, "error");
           }
         }
 
-        async function playStandard(baseUrl, apiKey, body) {
+        async function fetchStandardChunk(baseUrl, apiKey, body) {
           const response = await fetch(`${baseUrl}/v1/audio/speech`, {
             method: "POST",
             headers: {
@@ -456,95 +485,90 @@
                 `HTTP error! status: ${response.status}`
             );
           }
-          const blob = await response.blob();
-          const audioUrl = URL.createObjectURL(blob);
+          return await response.blob();
+        }
+
+        async function playStandardChunks(baseUrl, apiKey, baseBody, parts, buffers) {
+          for (let i = 0; i < parts.length; i++) {
+            updateStatus(`生成第 ${i + 1}/${parts.length} 段...`, "info");
+            const blob = await fetchStandardChunk(baseUrl, apiKey, {
+              ...baseBody,
+              input: parts[i],
+              stream: false,
+            });
+            buffers.push(new Uint8Array(await blob.arrayBuffer()));
+            await sleep(300);
+          }
+          const finalBlob = new Blob(buffers, { type: "audio/mpeg" });
+          const audioUrl = URL.createObjectURL(finalBlob);
           elements.audioPlayer.src = audioUrl;
           elements.audioPlayer.style.display = "block";
           elements.audioPlayer.play();
           updateStatus("播放中...", "success");
         }
 
-        // This is the new, robust MSE implementation
-        async function playStreamWithMSE(baseUrl, apiKey, body) {
+        async function fetchStreamChunk(baseUrl, apiKey, body, sourceBuffer, buffers) {
+          const response = await fetch(`${baseUrl}/v1/audio/speech`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(
+              errorData.error.message ||
+                `HTTP error! status: ${response.status}`
+            );
+          }
+
+          const reader = response.body.getReader();
+          const pump = async () => {
+            const { done, value } = await reader.read();
+            if (done) return;
+            buffers.push(value);
+            if (sourceBuffer.updating) {
+              await new Promise((resolve) =>
+                sourceBuffer.addEventListener("updateend", resolve, { once: true })
+              );
+            }
+            sourceBuffer.appendBuffer(value);
+            updateStatus("正在流式播放...", "success");
+            await pump();
+          };
+          await pump();
+        }
+
+        async function playStreamChunks(baseUrl, apiKey, baseBody, parts, buffers) {
           const mediaSource = new MediaSource();
           elements.audioPlayer.src = URL.createObjectURL(mediaSource);
           elements.audioPlayer.style.display = "block";
 
-          mediaSource.addEventListener(
-            "sourceopen",
-            async () => {
-              URL.revokeObjectURL(elements.audioPlayer.src);
-              const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
-
-              try {
-                const response = await fetch(`${baseUrl}/v1/audio/speech`, {
-                  method: "POST",
-                  headers: {
-                    Authorization: `Bearer ${apiKey}`,
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify(body),
-                });
-
-                if (!response.ok) {
-                  const errorData = await response.json();
-                  throw new Error(
-                    errorData.error.message ||
-                      `HTTP error! status: ${response.status}`
-                  );
-                }
-
-                updateStatus("已连接，接收数据中...", "info");
-                elements.audioPlayer
-                  .play()
-                  .catch((e) => console.warn("Autoplay was prevented:", e));
-
-                const reader = response.body.getReader();
-
-                // Robust pump function to handle backpressure
-                const pump = async () => {
-                  const { done, value } = await reader.read();
-
-                  if (done) {
-                    if (
-                      mediaSource.readyState === "open" &&
-                      !sourceBuffer.updating
-                    ) {
-                      mediaSource.endOfStream();
-                    }
-                    updateStatus("播放完毕！", "success");
-                    return;
-                  }
-
-                  // Wait for the buffer to be ready before appending
-                  if (sourceBuffer.updating) {
-                    await new Promise((resolve) =>
-                      sourceBuffer.addEventListener("updateend", resolve, {
-                        once: true,
-                      })
-                    );
-                  }
-
-                  sourceBuffer.appendBuffer(value);
-                  updateStatus("正在流式播放...", "success");
-                };
-
-                // Listen for 'updateend' to call the next pump, creating a controlled loop
-                sourceBuffer.addEventListener("updateend", pump);
-                // Start the first pump
-                await pump();
-              } catch (error) {
-                console.error("Error in MSE streaming:", error);
-                updateStatus(`错误: ${error.message}`, "error");
-                if (mediaSource.readyState === "open") {
-                  try {
-                    mediaSource.endOfStream();
-                  } catch (e) {}
-                }
-              }
-            },
-            { once: true }
+          await new Promise((resolve) =>
+            mediaSource.addEventListener("sourceopen", resolve, { once: true })
           );
+          URL.revokeObjectURL(elements.audioPlayer.src);
+          const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+          elements.audioPlayer.play().catch((e) => console.warn("Autoplay was prevented:", e));
+
+          for (let i = 0; i < parts.length; i++) {
+            updateStatus(`流式第 ${i + 1}/${parts.length} 段...`, "info");
+            await fetchStreamChunk(baseUrl, apiKey, { ...baseBody, input: parts[i], stream: true }, sourceBuffer, buffers);
+            await sleep(300);
+          }
+
+          if (mediaSource.readyState === "open" && !sourceBuffer.updating) {
+            mediaSource.endOfStream();
+          } else if (mediaSource.readyState === "open") {
+            await new Promise((resolve) =>
+              sourceBuffer.addEventListener("updateend", resolve, { once: true })
+            );
+            mediaSource.endOfStream();
+          }
+          updateStatus("播放完毕！", "success");
         }
 
         function updateStatus(message, type) {
