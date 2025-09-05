@@ -112,7 +112,7 @@ _上图展示了在 Cloudflare Pages 中配置 API_KEY 环境变量的完整流�
 1. 返回项目主页
 2. 点击 **创建新部署**
 3. 确认文件上传正确后，点击 **保存并部署**
-4. 等待部署完成（通常需要 1-3 分钟）
+4. 部署完成
 
 **重新部署说明**：
 
@@ -185,11 +185,11 @@ _上图展示了在 Cloudflare Pages 中配置 API_KEY 环境变量的完整流�
 
 ```javascript
 const OPENAI_VOICE_MAP = {
-  shimmer: "zh-CN-XiaoxiaoNeural",    // 可以改为其他微软音色
-  alloy: "zh-CN-YunyangNeural",       // 可以改为其他微软音色
-  fable: "zh-CN-YunjianNeural",       // 可以改为其他微软音色
-  onyx: "zh-CN-XiaoyiNeural",         // 可以改为其他微软音色
-  nova: "zh-CN-YunxiNeural",          // 可以改为其他微软音色
+  shimmer: "zh-CN-XiaoxiaoNeural", // 可以改为其他微软音色
+  alloy: "zh-CN-YunyangNeural", // 可以改为其他微软音色
+  fable: "zh-CN-YunjianNeural", // 可以改为其他微软音色
+  onyx: "zh-CN-XiaoyiNeural", // 可以改为其他微软音色
+  nova: "zh-CN-YunxiNeural", // 可以改为其他微软音色
   echo: "zh-CN-liaoning-XiaobeiNeural", // 可以改为其他微软音色
 };
 ```
@@ -297,9 +297,8 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
 
 ## 📄 项目文件说明
 
-- **`cf-tts_v1.zip`**: v1.0 完整发布包，包含所有必要文件，推荐直接使用此包进行部署
+- **`cf-tts_v1.zip`**: v1.0 cf webui 部署需要使用包或者带目录才可拖放
 - **`_worker.js`**: 核心服务文件，包含完整的服务端逻辑和嵌入式 WebUI。集成了 API 路由、认证、文本清理、Android App 模拟的 TTS 调用、以及功能完整的测试界面
-- **`workers.js`**: 备用工作文件，提供额外的功能扩展和配置选项
 - **`API_KEY.jpg`**: 配置示例图片，展示如何在 Cloudflare Pages 中设置环境变量
 
 **部署建议**：优先使用 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 发布包，或单独部署 `_worker.js` 文件。
@@ -313,6 +312,7 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
 3. **重新部署**：将修改后的文件重新部署到 Cloudflare Pages
 
 **可自定义的配置项**：
+
 - `OPENAI_VOICE_MAP` - OpenAI 音色到微软音色的映射关系
 - `TOKEN_REFRESH_BEFORE_EXPIRY` - Token 刷新时间
 - 其他全局配置参数
