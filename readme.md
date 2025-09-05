@@ -69,7 +69,7 @@
 **方式一：使用发布包（推荐）**
 
 - 下载 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 中的发布包
-- 在 Cloudflare Pages 的 WebUI 中直接拖放下载的zip文件
+- 在 Cloudflare Pages 的 WebUI 中直接拖放下载的 zip 文件
 - 系统会自动解压并部署所有文件
 
 **方式二：单文件部署**
@@ -181,6 +181,21 @@ _上图展示了在 Cloudflare Pages 中配置 API_KEY 环境变量的完整流�
 - `nova` - 阳光男声 (zh-CN-YunxiNeural)
 - `echo` - 东北女声 (zh-CN-liaoning-XiaobeiNeural)
 
+**💡 自定义音色映射**：您可以在 `_worker.js` 文件中修改 `OPENAI_VOICE_MAP` 对象来自定义音色映射关系：
+
+```javascript
+const OPENAI_VOICE_MAP = {
+  shimmer: "zh-CN-XiaoxiaoNeural",    // 可以改为其他微软音色
+  alloy: "zh-CN-YunyangNeural",       // 可以改为其他微软音色
+  fable: "zh-CN-YunjianNeural",       // 可以改为其他微软音色
+  onyx: "zh-CN-XiaoyiNeural",         // 可以改为其他微软音色
+  nova: "zh-CN-YunxiNeural",          // 可以改为其他微软音色
+  echo: "zh-CN-liaoning-XiaobeiNeural", // 可以改为其他微软音色
+};
+```
+
+修改后需要重新部署才能生效。
+
 #### 微软原生音色 (推荐)
 
 **女声系列：**
@@ -288,6 +303,19 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
 - **`API_KEY.jpg`**: 配置示例图片，展示如何在 Cloudflare Pages 中设置环境变量
 
 **部署建议**：优先使用 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 发布包，或单独部署 `_worker.js` 文件。
+
+### 🔧 高级自定义配置
+
+如果您需要自定义音色映射或其他配置，可以：
+
+1. **下载源码**：从 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 下载发布包
+2. **修改配置**：编辑 `_worker.js` 文件中的相关配置
+3. **重新部署**：将修改后的文件重新部署到 Cloudflare Pages
+
+**可自定义的配置项**：
+- `OPENAI_VOICE_MAP` - OpenAI 音色到微软音色的映射关系
+- `TOKEN_REFRESH_BEFORE_EXPIRY` - Token 刷新时间
+- 其他全局配置参数
 
 ## ✨ 新版本特性
 
