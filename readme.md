@@ -10,9 +10,8 @@
 
 - **`cf-tts_v1.zip`** - 完整的 v1.0 版本发布包，包含所有必要文件
 - **`_worker.js`** - 核心服务文件，包含完整的服务端逻辑和嵌入式 WebUI
-- **`workers.js`** - 备用工作文件
 
-**推荐使用方式**：直接下载 `cf-tts_v1.zip` 进行部署，或单独使用 `_worker.js` 文件。
+**推荐使用方式**：直接下载 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 进行部署，或单独使用 `_worker.js` 文件。
 
 ---
 
@@ -69,8 +68,8 @@
 
 **方式一：使用发布包（推荐）**
 
-- 下载 `cf-tts_v1.zip` 发布包
-- 在 Cloudflare Pages 的 WebUI 中直接拖放 `cf-tts_v1.zip` 文件
+- 下载 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 中的发布包
+- 在 Cloudflare Pages 的 WebUI 中直接拖放下载的zip文件
 - 系统会自动解压并部署所有文件
 
 **方式二：单文件部署**
@@ -288,7 +287,7 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
 - **`workers.js`**: 备用工作文件，提供额外的功能扩展和配置选项
 - **`API_KEY.jpg`**: 配置示例图片，展示如何在 Cloudflare Pages 中设置环境变量
 
-**部署建议**：优先使用 `cf-tts_v1.zip` 发布包，或单独部署 `_worker.js` 文件。
+**部署建议**：优先使用 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 发布包，或单独部署 `_worker.js` 文件。
 
 ## ✨ 新版本特性
 
