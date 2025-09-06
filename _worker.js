@@ -364,8 +364,9 @@ function cleanText(text, options) {
   if (options.remove_citation_numbers)
     cleanedText = cleanedText.replace(/\[\d+\]/g, "").replace(/【\d+】/g, "");
   if (options.remove_line_breaks) {
-    cleanedText = cleanedText.replace(/(\r\n|\n|\r)/gm, " ");
-    // 只有在移除换行符时才合并多个空格
+    // 移除换行符，不添加空格，直接连接文本
+    cleanedText = cleanedText.replace(/(\r\n|\n|\r)/gm, "");
+    // 合并多个连续空格为单个空格
     return cleanedText.trim().replace(/\s+/g, " ");
   } else {
     // 保留换行符，只合并非换行的连续空格
