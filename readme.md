@@ -1,4 +1,4 @@
-# 高性能 Edge TTS Cloudflare Pages 代理
+# CF-TTS Proxy Server (v1.1)
 
 这是一个部署在 Cloudflare Pages 上的高性能文本转语音（TTS）代理服务。它巧妙地将微软 Edge 强大且自然的语音合成服务，封装成了一个兼容 OpenAI API 格式的接口。这使得开发者可以无缝地将各种现有应用对接到这个免费、高质量的 TTS 服务上。
 
@@ -18,6 +18,11 @@
 - **🐛 修复换行符处理 bug**：解决了文本清理功能中换行符保留/移除的逻辑错误
 - **📦 优化部署包**：只包含 `_worker.js` 文件，适合 Cloudflare Pages 直接部署
 - **⚡ 文件大小优化**：9.6KB（压缩率 70%）
+- **🗄️ 历史记录存储**：新增 KV 存储功能，自动保存 TTS 生成历史
+- **🔗 分享功能**：支持生成分享链接，可设置密码保护
+- **🔐 API 密钥验证**：增强安全性，需要 API 密钥才能访问服务
+- **📱 历史记录页面**：新增 `/history` 页面查看和管理历史记录
+- **🎵 音频分享页面**：新增 `/share/{id}` 页面用于分享音频内容
 
 ---
 
@@ -34,8 +39,11 @@
   - 移除所有多余的空格和硬换行，确保中文听感自然连贯。
   - 支持自定义关键词过滤。
 - **🎛️ 灵活的参数配置**: 支持通过 API 请求动态调整所有核心参数，包括音色、语速、音调、分块大小、并发数以及所有清理选项。
-- **🌐 零依赖部署**: 脚本完全自包含，无需配置 KV、队列等任何外部服务，部署过程极其简单。
-- **💻 便捷的测试工具**: 提供一个功能丰富的 `webui.html`，让用户无需编写任何代码即可测试所有功能。
+- **🌐 零依赖部署**: 脚本完全自包含，可选配置 KV 存储，部署过程极其简单。
+- **💻 便捷的测试工具**: 提供一个功能丰富的 WebUI，让用户无需编写任何代码即可测试所有功能。
+- **🗄️ 智能历史记录**: 自动保存所有 TTS 生成记录，支持查看、管理和分享。
+- **🔗 一键分享**: 生成分享链接，支持密码保护，方便与他人分享音频内容。
+- **🔐 安全访问控制**: 支持 API 密钥验证，确保服务安全可靠。
 
 ---
 
@@ -88,7 +96,9 @@
 - 如果您有完整的项目目录结构，可以拖放整个目录
 - 确保 `_worker.js` 文件位于根目录
 
-### 步骤二：配置环境变量
+### 步骤二：配置环境变量和 KV 存储
+
+#### 2.1 配置 API 密钥
 
 为了确保 API 的安全性，您需要设置一个 API 密钥来控制访问权限。
 
@@ -105,11 +115,28 @@
 
 _上图展示了在 Cloudflare Pages 中配置 API_KEY 环境变量的完整流程。选择"密钥(Secret)"类型，输入变量名"API_KEY"和对应的值，然后点击"添加变量"即可完成配置。_
 
+#### 2.2 配置 KV 存储（可选）
+
+如果您需要使用历史记录和分享功能，需要配置 KV 存储：
+
+1. 在项目设置页面，点击 **设置** → **绑定**
+2. 点击 **+ 添加** 按钮
+3. 选择 **KV 命名空间**
+4. 配置 KV 绑定：
+   - **变量名称**: `TTS_HISTORY`
+   - **KV 命名空间**: 选择或创建一个 KV 命名空间（例如 `tts_kv`）
+5. 点击 **保存** 完成配置
+
+![配置KV存储](TTS_HISTORY.jpg)
+
+_上图展示了在 Cloudflare Pages 中配置 KV 存储的完整流程。在绑定页面添加 KV 命名空间，设置变量名为"TTS_HISTORY"，并选择对应的 KV 命名空间。_
+
 **重要提示**：
 
 - API 密钥一旦保存后无法再次查看，请妥善保管
 - 建议使用复杂的随机字符串作为密钥
 - 这个密钥将用于后续 API 调用的身份验证
+- KV 存储用于保存历史记录和分享数据，如果不配置将无法使用相关功能
 
 ⚠️ **关键提醒**：设置或修改环境变量后，**必须重新部署一次**才能生效！
 
@@ -133,6 +160,13 @@ _上图展示了在 Cloudflare Pages 中配置 API_KEY 环境变量的完整流�
 2. **配置 API Key**: 在页面的"API 配置"部分输入您设置的密钥
 3. **开始使用**: 现在可以直接在网页上测试 TTS 功能了！
 
+#### 新增功能使用说明
+
+- **历史记录页面**: 访问 `https://your-project-name.pages.dev/history` 查看所有 TTS 生成历史
+- **分享功能**: 在历史记录页面点击"分享"按钮，可生成分享链接并设置密码
+- **分享页面**: 访问 `https://your-project-name.pages.dev/share/{id}` 查看分享的音频内容
+- **API 密钥验证**: 所有 API 请求都需要在请求头中包含 `Authorization: Bearer YOUR_API_KEY`
+
 ### ⚠️ 重要提示
 
 **首次部署可能遇到的问题**：
@@ -148,7 +182,18 @@ _上图展示了在 Cloudflare Pages 中配置 API_KEY 环境变量的完整流�
 
 ### 端点
 
-`POST https://your-project-name.pages.dev/v1/audio/speech`
+#### TTS 服务端点
+- `POST https://your-project-name.pages.dev/v1/audio/speech` - 生成语音
+- `GET https://your-project-name.pages.dev/v1/models` - 获取可用模型
+
+#### 新增功能端点
+- `GET https://your-project-name.pages.dev/history` - 历史记录页面
+- `GET https://your-project-name.pages.dev/share/{id}` - 分享页面
+- `POST https://your-project-name.pages.dev/api/save` - 保存 TTS 到历史记录
+- `GET https://your-project-name.pages.dev/api/history` - 获取历史记录 API
+- `POST https://your-project-name.pages.dev/api/set-password` - 设置分享密码
+- `DELETE https://your-project-name.pages.dev/api/delete` - 删除历史记录
+- `GET https://your-project-name.pages.dev/api/audio/{id}` - 获取音频文件
 
 ### 认证
 
@@ -160,11 +205,14 @@ _上图展示了在 Cloudflare Pages 中配置 API_KEY 环境变量的完整流�
 
 | 参数 (Parameter)            | 类型 (Type) | 默认值 (Default)         | 描述 (Description)                                                                                    |
 | --------------------------- | ----------- | ------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `model`                     | `string`    | `"tts-1"`                | 模型 ID。支持 `tts-1`, `tts-1-hd`，或映射的音色如 `tts-1-alloy`。                                     |
+| `model`                     | `string`    | `"tts-1"`                | 模型 ID。标准格式：`tts-1`, `tts-1-hd`。兼容格式：`tts-1-alloy` 等。                                  |
 | `input`                     | `string`    | **必需**                 | 需要转换为语音的文本。**支持任意长度**。                                                              |
-| `voice`                     | `string`    | `"zh-CN-XiaoxiaoNeural"` | 音色选择。支持 OpenAI 格式 (`shimmer`, `alloy`, `fable`, `onyx`, `nova`, `echo`) 或微软原生音色名称。 |
+| `voice`                     | `string`    | `"alloy"`                | 音色选择。支持 OpenAI 格式 (`shimmer`, `alloy`, `fable`, `onyx`, `nova`, `echo`) 或微软原生音色名称。 |
 | `speed`                     | `number`    | `1.0`                    | 语速。范围从 0.25 到 2.0。                                                                            |
-| `pitch`                     | `number`    | `1.0`                    | 音调。                                                                                                |
+| `pitch`                     | `number`    | `1.0`                    | 音调。范围从 0.5 到 1.5。                                                                             |
+| `style`                     | `string`    | `"general"`              | 语音风格。支持 `cheerful`, `sad`, `angry`, `friendly` 等 14 种风格。                                   |
+| `role`                      | `string`    | `""`                     | 角色扮演。支持 `Girl`, `Boy`, `YoungAdultFemale` 等 8 种角色。                                        |
+| `styleDegree`               | `number`    | `1.0`                    | 风格强度。范围从 0.01 到 2.0，控制语音风格的强烈程度。                                                |
 | `stream`                    | `boolean`   | `false`                  | 是否使用流式响应。设为 `true` 可极大降低长文本的首次延迟。                                            |
 | `concurrency`               | `number`    | `10`                     | 并发请求数。控制同时向微软服务器发送多少个文本块请求。                                                |
 | `chunk_size`                | `number`    | `300`                    | 文本分块大小（字符数）。Worker 会根据平台限制自动调整此值以确保成功。                                 |
@@ -172,7 +220,7 @@ _上图展示了在 Cloudflare Pages 中配置 API_KEY 环境变量的完整流�
 | `├ remove_markdown`         | `boolean`   | `true`                   | 是否移除 Markdown 格式。                                                                              |
 | `├ remove_emoji`            | `boolean`   | `true`                   | 是否移除 Emoji。                                                                                      |
 | `├ remove_urls`             | `boolean`   | `true`                   | 是否移除 URL。                                                                                        |
-| `├ remove_line_breaks`      | `boolean`   | `true`                   | 是否移除所有空格和换行符。                                                                            |
+| `├ remove_line_breaks`      | `boolean`   | `false`                  | 是否移除所有换行符。                                                                                  |
 | `├ remove_citation_numbers` | `boolean`   | `true`                   | 是否智能移除论文引用标记。                                                                            |
 | `├ custom_keywords`         | `string`    | `""`                     | 自定义要移除的关键词，以逗号分隔。                                                                    |
 
@@ -231,16 +279,16 @@ const OPENAI_VOICE_MAP = {
 
 ### cURL 示例
 
-#### 1. OpenAI 兼容格式 (推荐)
+#### 1. 标准 OpenAI 格式 (推荐)
 
 ```bash
 curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -d '{
-         "model": "tts-1-shimmer",
-         "input": "你好，世界！这是使用 OpenAI 兼容格式的语音合成请求。",
+         "model": "tts-1",
          "voice": "shimmer",
+         "input": "你好，世界！这是使用 OpenAI 标准格式的语音合成请求。",
          "response_format": "mp3"
      }' --output standard.mp3
 ```
@@ -252,9 +300,9 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -d '{
-         "model": "tts-1-nova",
-         "input": "这是一个流式请求的示例，对于较长的文本，你能更快地听到声音的开头部分。",
+         "model": "tts-1",
          "voice": "nova",
+         "input": "这是一个流式请求的示例，对于较长的文本，你能更快地听到声音的开头部分。",
          "stream": true
      }' --output streaming.mp3
 ```
@@ -266,9 +314,9 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -d '{
-         "model": "tts-1-shimmer",
-         "input": "这段文本包含 **Markdown** 1、一个链接 https://example.com 和一个表情 😂。",
+         "model": "tts-1",
          "voice": "shimmer",
+         "input": "这段文本包含 **Markdown** 1、一个链接 https://example.com 和一个表情 😂。",
          "cleaning_options": {
              "remove_markdown": true,
              "remove_urls": true,
@@ -279,18 +327,34 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
      }' --output cleaned.mp3
 ```
 
-#### 4. 微软 Edge TTS 原生格式
+#### 4. 自定义音色配置 (高级功能)
 
 ```bash
 curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer YOUR_API_KEY" \
      -d '{
-         "input": "你好，这是使用微软原生音色的语音合成。",
+         "model": "tts-1",
          "voice": "zh-CN-XiaoxiaoNeural",
+         "input": "你好，这是使用微软原生音色和高级配置的语音合成。",
+         "style": "cheerful",
+         "role": "YoungAdultFemale",
+         "styleDegree": 1.5,
          "speed": 1.2,
          "pitch": 1.1
-     }' --output microsoft.mp3
+     }' --output advanced.mp3
+```
+
+#### 5. 兼容旧格式 (向后兼容)
+
+```bash
+curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer YOUR_API_KEY" \
+     -d '{
+         "model": "tts-1-shimmer",
+         "input": "这是兼容旧格式的请求，仍然可以正常工作。"
+     }' --output compatible.mp3
 ```
 
 ---
@@ -303,9 +367,10 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
 
 ## 📄 项目文件说明
 
-- **`cf-tts_v1.1.zip`**: v1.1 cf webui 部署需要使用包或者带目录才可拖放
-- **`_worker.js`**: 核心服务文件，包含完整的服务端逻辑和嵌入式 WebUI。集成了 API 路由、认证、文本清理、Android App 模拟的 TTS 调用、以及功能完整的测试界面
-- **`API_KEY.jpg`**: 配置示例图片，展示如何在 Cloudflare Pages 中设置环境变量
+- **`cf-tts_v1.1.zip`**: v1.1 完整部署包，包含所有必要文件
+- **`_worker.js`**: 核心服务文件，包含完整的服务端逻辑和嵌入式 WebUI。集成了 API 路由、认证、文本清理、Android App 模拟的 TTS 调用、历史记录存储、分享功能以及功能完整的测试界面
+- **`API_KEY.jpg`**: 配置示例图片，展示如何在 Cloudflare Pages 中设置 API_KEY 环境变量
+- **`TTS_HISTORY.jpg`**: 配置示例图片，展示如何在 Cloudflare Pages 中配置 KV 存储
 
 **部署建议**：优先使用 [v1.1 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.1) 发布包，或单独部署 `_worker.js` 文件。
 

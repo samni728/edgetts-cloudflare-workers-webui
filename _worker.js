@@ -51,7 +51,7 @@ async function handleRequest(request) {
       headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   }
-  
+
   // Handle favicon
   if (url.pathname === "/favicon.ico") {
     return new Response(getFaviconSVG(), {
@@ -80,10 +80,17 @@ async function handleRequest(request) {
       return await handleSpeechRequest(request);
     if (url.pathname === "/v1/models") return handleModelsRequest();
     if (url.pathname === "/history") return await handleHistoryRequest(request);
-    if (url.pathname.startsWith("/share/")) return await handleShareRequest(request);
+    if (url.pathname.startsWith("/share/"))
+      return await handleShareRequest(request);
     if (url.pathname === "/api/save") return await handleSaveRequest(request);
-    if (url.pathname === "/api/history") return await handleHistoryApiRequest(request);
-    if (url.pathname.startsWith("/api/audio/")) return await handleAudioRequest(request);
+    if (url.pathname === "/api/history")
+      return await handleHistoryApiRequest(request);
+    if (url.pathname === "/api/set-password")
+      return await handleSetPasswordRequest(request);
+    if (url.pathname === "/api/delete")
+      return await handleDeleteRequest(request);
+    if (url.pathname.startsWith("/api/audio/"))
+      return await handleAudioRequest(request);
   } catch (err) {
     return errorResponse(err.message, 500, "internal_server_error");
   }
@@ -108,13 +115,13 @@ async function handleSaveRequest(request) {
   try {
     // Parse FormData
     const formData = await request.formData();
-    const text = formData.get('text');
-    const voice = formData.get('voice');
-    const speed = parseFloat(formData.get('speed'));
-    const pitch = parseFloat(formData.get('pitch'));
-    const cleaningOptions = JSON.parse(formData.get('cleaningOptions') || '{}');
-    const audioFile = formData.get('audioFile');
-    
+    const text = formData.get("text");
+    const voice = formData.get("voice");
+    const speed = parseFloat(formData.get("speed"));
+    const pitch = parseFloat(formData.get("pitch"));
+    const cleaningOptions = JSON.parse(formData.get("cleaningOptions") || "{}");
+    const audioFile = formData.get("audioFile");
+
     if (!text || !audioFile) {
       return errorResponse("Missing required fields", 400, "invalid_request");
     }
@@ -122,11 +129,11 @@ async function handleSaveRequest(request) {
     // Generate unique ID
     const id = crypto.randomUUID();
     const timestamp = Date.now();
-    
+
     // Get audio data as ArrayBuffer
     const audioArrayBuffer = await audioFile.arrayBuffer();
     const audioData = new Uint8Array(audioArrayBuffer);
-    
+
     // Create metadata
     const metadata = {
       id,
@@ -137,29 +144,31 @@ async function handleSaveRequest(request) {
       cleaningOptions,
       timestamp,
       summary: text.substring(0, 100) + (text.length > 100 ? "..." : ""),
-      size: audioData.length
+      size: audioData.length,
     };
-    
+
     // Check storage limit and clean if necessary
     await cleanupStorageIfNeeded(audioData.length);
-    
+
     // Save audio data directly (no encoding needed)
     await globalThis.TTS_HISTORY.put(`audio_${id}`, audioData, {
-      metadata: { type: "audio", timestamp }
+      metadata: { type: "audio", timestamp },
     });
 
     // Save metadata
     await globalThis.TTS_HISTORY.put(`meta_${id}`, JSON.stringify(metadata), {
-      metadata: { type: "metadata", timestamp }
+      metadata: { type: "metadata", timestamp },
     });
 
     // Update history index
     await updateHistoryIndex(id, metadata);
 
-    return new Response(JSON.stringify({ success: true, id, shareUrl: `/share/${id}` }), {
-      headers: { "Content-Type": "application/json", ...makeCORSHeaders() }
-    });
-
+    return new Response(
+      JSON.stringify({ success: true, id, shareUrl: `/share/${id}` }),
+      {
+        headers: { "Content-Type": "application/json", ...makeCORSHeaders() },
+      }
+    );
   } catch (error) {
     return errorResponse(`Save failed: ${error.message}`, 500, "save_error");
   }
@@ -168,7 +177,7 @@ async function handleSaveRequest(request) {
 // Handle history page
 async function handleHistoryRequest(request) {
   return new Response(getHistoryPageHTML(), {
-    headers: { "Content-Type": "text/html; charset=utf-8" }
+    headers: { "Content-Type": "text/html; charset=utf-8" },
   });
 }
 
@@ -178,18 +187,134 @@ async function handleHistoryApiRequest(request) {
     return errorResponse("KV storage not configured", 500, "storage_error");
   }
 
+  // Check API key for history access
+  const authHeader = request.headers.get("authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return errorResponse(
+      "API key required to access history",
+      401,
+      "unauthorized"
+    );
+  }
+
   try {
     const historyData = await globalThis.TTS_HISTORY.get("history_index");
     const history = historyData ? JSON.parse(historyData) : [];
-    
+
     // Sort by timestamp (newest first)
     history.sort((a, b) => b.timestamp - a.timestamp);
 
     return new Response(JSON.stringify({ history }), {
-      headers: { "Content-Type": "application/json", ...makeCORSHeaders() }
+      headers: { "Content-Type": "application/json", ...makeCORSHeaders() },
     });
   } catch (error) {
-    return errorResponse(`Failed to load history: ${error.message}`, 500, "history_error");
+    return errorResponse(
+      `Failed to load history: ${error.message}`,
+      500,
+      "history_error"
+    );
+  }
+}
+
+// Handle set password for share
+async function handleSetPasswordRequest(request) {
+  if (request.method !== "POST") {
+    return errorResponse("Method Not Allowed", 405, "method_not_allowed");
+  }
+
+  if (!globalThis.TTS_HISTORY) {
+    return errorResponse("KV storage not configured", 500, "storage_error");
+  }
+
+  // Check API key
+  const authHeader = request.headers.get("authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return errorResponse("API key required", 401, "unauthorized");
+  }
+
+  try {
+    const { id, password } = await request.json();
+
+    if (!id) {
+      return errorResponse("Missing item ID", 400, "invalid_request");
+    }
+
+    // Get existing metadata
+    const metadataStr = await globalThis.TTS_HISTORY.get(`meta_${id}`);
+    if (!metadataStr) {
+      return errorResponse("Item not found", 404, "not_found");
+    }
+
+    const metadata = JSON.parse(metadataStr);
+
+    // Update password (empty string removes password)
+    metadata.password = password || null;
+
+    // Save updated metadata
+    await globalThis.TTS_HISTORY.put(`meta_${id}`, JSON.stringify(metadata), {
+      metadata: { type: "metadata", timestamp: metadata.timestamp },
+    });
+
+    return new Response(
+      JSON.stringify({ success: true, hasPassword: !!password }),
+      {
+        headers: { "Content-Type": "application/json", ...makeCORSHeaders() },
+      }
+    );
+  } catch (error) {
+    return errorResponse(
+      `Failed to set password: ${error.message}`,
+      500,
+      "password_error"
+    );
+  }
+}
+
+// Handle delete item
+async function handleDeleteRequest(request) {
+  if (request.method !== "POST") {
+    return errorResponse("Method Not Allowed", 405, "method_not_allowed");
+  }
+
+  if (!globalThis.TTS_HISTORY) {
+    return errorResponse("KV storage not configured", 500, "storage_error");
+  }
+
+  // Check API key
+  const authHeader = request.headers.get("authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return errorResponse("API key required", 401, "unauthorized");
+  }
+
+  try {
+    const { id } = await request.json();
+
+    if (!id) {
+      return errorResponse("Missing item ID", 400, "invalid_request");
+    }
+
+    // Delete audio and metadata
+    await globalThis.TTS_HISTORY.delete(`audio_${id}`);
+    await globalThis.TTS_HISTORY.delete(`meta_${id}`);
+
+    // Update history index
+    const historyData = await globalThis.TTS_HISTORY.get("history_index");
+    const history = historyData ? JSON.parse(historyData) : [];
+    const updatedHistory = history.filter((item) => item.id !== id);
+    await globalThis.TTS_HISTORY.put(
+      "history_index",
+      JSON.stringify(updatedHistory)
+    );
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { "Content-Type": "application/json", ...makeCORSHeaders() },
+    });
+  } catch (error) {
+    return errorResponse(
+      `Failed to delete item: ${error.message}`,
+      500,
+      "delete_error"
+    );
   }
 }
 
@@ -197,6 +322,7 @@ async function handleHistoryApiRequest(request) {
 async function handleShareRequest(request) {
   const url = new URL(request.url);
   const id = url.pathname.split("/")[2];
+  const providedPassword = url.searchParams.get("pwd");
 
   if (!id || !globalThis.TTS_HISTORY) {
     return errorResponse("Invalid share link", 404, "not_found");
@@ -209,17 +335,30 @@ async function handleShareRequest(request) {
     }
 
     const metadata = JSON.parse(metadataStr);
-    const audioData = await globalThis.TTS_HISTORY.get(`audio_${id}`);
 
+    // Check password protection
+    if (metadata.password) {
+      if (!providedPassword || providedPassword !== metadata.password) {
+        return new Response(getPasswordPageHTML(id), {
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+    }
+
+    const audioData = await globalThis.TTS_HISTORY.get(`audio_${id}`);
     if (!audioData) {
       return errorResponse("Audio data not found", 404, "not_found");
     }
 
     return new Response(getSharePageHTML(metadata, id), {
-      headers: { "Content-Type": "text/html; charset=utf-8" }
+      headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   } catch (error) {
-    return errorResponse(`Failed to load share page: ${error.message}`, 500, "share_error");
+    return errorResponse(
+      `Failed to load share page: ${error.message}`,
+      500,
+      "share_error"
+    );
   }
 }
 
@@ -233,7 +372,10 @@ async function handleAudioRequest(request) {
   }
 
   try {
-    const audioData = await globalThis.TTS_HISTORY.get(`audio_${id}`, "arrayBuffer");
+    const audioData = await globalThis.TTS_HISTORY.get(
+      `audio_${id}`,
+      "arrayBuffer"
+    );
     if (!audioData) {
       return errorResponse("Audio not found", 404, "not_found");
     }
@@ -244,11 +386,15 @@ async function handleAudioRequest(request) {
         "Content-Length": audioData.byteLength.toString(),
         "Accept-Ranges": "bytes",
         "Cache-Control": "public, max-age=31536000",
-        ...makeCORSHeaders()
-      }
+        ...makeCORSHeaders(),
+      },
     });
   } catch (error) {
-    return errorResponse(`Failed to serve audio: ${error.message}`, 500, "audio_error");
+    return errorResponse(
+      `Failed to serve audio: ${error.message}`,
+      500,
+      "audio_error"
+    );
   }
 }
 
@@ -284,14 +430,25 @@ async function handleSpeechRequest(request) {
     speed = 1.0,
     pitch = 1.0,
     style = "general",
+    role = "",
+    styleDegree = 1.0,
     stream = false,
     cleaning_options = {},
   } = requestBody;
 
-  const finalVoice =
-    OPENAI_VOICE_MAP[model.replace("tts-1-", "")] ||
-    voice ||
-    "zh-CN-XiaoxiaoNeural";
+  // OpenAI 兼容性处理
+  let finalVoice;
+  if (model === "tts-1" || model === "tts-1-hd") {
+    // 标准 OpenAI 格式：使用 voice 参数
+    finalVoice = OPENAI_VOICE_MAP[voice] || voice || "zh-CN-XiaoxiaoNeural";
+  } else if (model.startsWith("tts-1-")) {
+    // 兼容旧格式：从 model 中提取音色
+    finalVoice =
+      OPENAI_VOICE_MAP[model.replace("tts-1-", "")] || "zh-CN-XiaoxiaoNeural";
+  } else {
+    // 直接使用指定的音色
+    finalVoice = voice || model || "zh-CN-XiaoxiaoNeural";
+  }
   const finalCleaningOptions = {
     remove_markdown: true,
     remove_emoji: true,
@@ -313,6 +470,8 @@ async function handleSpeechRequest(request) {
       rate,
       numPitch,
       style,
+      role,
+      styleDegree,
       outputFormat
     );
   } else {
@@ -322,6 +481,8 @@ async function handleSpeechRequest(request) {
       rate,
       numPitch,
       style,
+      role,
+      styleDegree,
       outputFormat
     );
   }
@@ -352,7 +513,16 @@ function handleModelsRequest() {
 // Core TTS Logic (Android App Simulation)
 // =================================================================================
 
-async function getVoice(text, voiceName, rate, pitch, style, outputFormat) {
+async function getVoice(
+  text,
+  voiceName,
+  rate,
+  pitch,
+  style,
+  role,
+  styleDegree,
+  outputFormat
+) {
   const maxChunkSize = 2000;
   const chunks = [];
   for (let i = 0; i < text.length; i += maxChunkSize) {
@@ -360,7 +530,16 @@ async function getVoice(text, voiceName, rate, pitch, style, outputFormat) {
   }
   const audioChunks = await Promise.all(
     chunks.map((chunk) =>
-      getAudioChunk(chunk, voiceName, rate, pitch, style, outputFormat)
+      getAudioChunk(
+        chunk,
+        voiceName,
+        rate,
+        pitch,
+        style,
+        role,
+        styleDegree,
+        outputFormat
+      )
     )
   );
   const concatenatedAudio = new Blob(audioChunks, { type: "audio/mpeg" });
@@ -375,6 +554,8 @@ async function getVoiceStream(
   rate,
   pitch,
   style,
+  role,
+  styleDegree,
   outputFormat
 ) {
   const maxChunkSize = 2000;
@@ -395,6 +576,8 @@ async function getVoiceStream(
           rate,
           pitch,
           style,
+          role,
+          styleDegree,
           outputFormat
         );
         const arrayBuffer = await audioBlob.arrayBuffer();
@@ -418,14 +601,34 @@ async function getAudioChunk(
   rate,
   pitch,
   style,
+  role,
+  styleDegree,
   outputFormat
 ) {
   const endpoint = await getEndpoint();
   const url = `https://${endpoint.r}.tts.speech.microsoft.com/cognitiveservices/v1`;
-  const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}"><mstts:express-as style="${style}"><prosody rate="${rate}%" pitch="${pitch}%">${text
+
+  // 构建高级SSML
+  const escapedText = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")}</prosody></mstts:express-as></voice></speak>`;
+    .replace(/>/g, "&gt;");
+
+  let ssmlContent = `<prosody rate="${rate}%" pitch="${pitch}%">${escapedText}</prosody>`;
+
+  // 添加语音风格和强度
+  if (style && style !== "general") {
+    const styleAttributes =
+      styleDegree !== 1.0 ? ` styledegree="${styleDegree}"` : "";
+    ssmlContent = `<mstts:express-as style="${style}"${styleAttributes}>${ssmlContent}</mstts:express-as>`;
+  }
+
+  // 添加角色扮演
+  if (role) {
+    ssmlContent = `<mstts:express-as role="${role}">${ssmlContent}</mstts:express-as>`;
+  }
+
+  const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}">${ssmlContent}</voice></speak>`;
 
   const response = await fetch(url, {
     method: "POST",
@@ -453,10 +656,11 @@ async function getEndpoint() {
   ) {
     return tokenInfo.endpoint;
   }
-  
-  const endpointUrl = "https://dev.microsofttranslator.com/apps/endpoint?api-version=1.0";
+
+  const endpointUrl =
+    "https://dev.microsofttranslator.com/apps/endpoint?api-version=1.0";
   const clientId = crypto.randomUUID().replace(/-/g, "");
-  
+
   // 重试机制
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -476,11 +680,11 @@ async function getEndpoint() {
           "Accept-Encoding": "gzip",
         },
       });
-      
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-      
+
       const data = await response.json();
       const jwt = data.t.split(".")[1];
       const decodedJwt = JSON.parse(atob(jwt));
@@ -489,21 +693,23 @@ async function getEndpoint() {
     } catch (error) {
       lastError = error;
       console.error(`Endpoint attempt ${attempt} failed:`, error.message);
-      
+
       // 如果不是最后一次尝试，等待一下再重试
       if (attempt < 3) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
       }
     }
   }
-  
+
   // 如果所有重试都失败，尝试使用缓存的 token
   if (tokenInfo.token) {
     console.warn("Using cached token due to endpoint failures");
     return tokenInfo.endpoint;
   }
-  
-  throw new Error(`Failed to get endpoint after 3 attempts: ${lastError.message}`);
+
+  throw new Error(
+    `Failed to get endpoint after 3 attempts: ${lastError.message}`
+  );
 }
 
 async function sign(urlStr) {
@@ -533,19 +739,19 @@ async function cleanupStorageIfNeeded(newItemSize) {
     // Get current storage usage
     const historyData = await globalThis.TTS_HISTORY.get("history_index");
     const history = historyData ? JSON.parse(historyData) : [];
-    
+
     let totalSize = history.reduce((sum, item) => sum + (item.size || 0), 0);
-    
+
     // If adding new item would exceed limit, remove oldest items
     while (totalSize + newItemSize > MAX_STORAGE_SIZE && history.length > 0) {
       const oldestItem = history.shift(); // Remove oldest
-      totalSize -= (oldestItem.size || 0);
-      
+      totalSize -= oldestItem.size || 0;
+
       // Delete from KV
       await globalThis.TTS_HISTORY.delete(`audio_${oldestItem.id}`);
       await globalThis.TTS_HISTORY.delete(`meta_${oldestItem.id}`);
     }
-    
+
     // Update history index
     await globalThis.TTS_HISTORY.put("history_index", JSON.stringify(history));
   } catch (error) {
@@ -559,21 +765,22 @@ async function updateHistoryIndex(id, metadata) {
   try {
     const historyData = await globalThis.TTS_HISTORY.get("history_index");
     const history = historyData ? JSON.parse(historyData) : [];
-    
+
     // Add new item to beginning
     history.unshift({
       id: metadata.id,
       summary: metadata.summary,
       timestamp: metadata.timestamp,
       voice: metadata.voice,
-      size: metadata.size
+      size: metadata.size,
+      hasPassword: !!metadata.password,
     });
-    
+
     // Keep only last 1000 items for performance
     if (history.length > 1000) {
       history.splice(1000);
     }
-    
+
     await globalThis.TTS_HISTORY.put("history_index", JSON.stringify(history));
   } catch (error) {
     console.error("Failed to update history index:", error);
@@ -581,57 +788,57 @@ async function updateHistoryIndex(id, metadata) {
 }
 
 function formatFileSize(bytes) {
-  if (bytes === 0) return '0 B';
+  if (bytes === 0) return "0 B";
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const sizes = ["B", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
 function formatDate(timestamp) {
-  return new Date(timestamp).toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
+  return new Date(timestamp).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
 function renderMarkdown(text) {
-  if (!text) return '';
-  
+  if (!text) return "";
+
   // 简单的Markdown渲染
   let html = text
     // 转义HTML
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+
     // 标题
-    .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-    .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-    .replace(/^# (.*$)/gm, '<h1>$1</h1>')
-    
+    .replace(/^### (.*$)/gm, "<h3>$1</h3>")
+    .replace(/^## (.*$)/gm, "<h2>$1</h2>")
+    .replace(/^# (.*$)/gm, "<h1>$1</h1>")
+
     // 粗体和斜体
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+
     // 代码
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+
     // 链接
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
-    
+
     // 换行处理
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br>');
-    
+    .replace(/\n\n/g, "</p><p>")
+    .replace(/\n/g, "<br>");
+
   // 包装在段落中
-  if (html && !html.startsWith('<h') && !html.startsWith('<p>')) {
-    html = '<p>' + html + '</p>';
+  if (html && !html.startsWith("<h") && !html.startsWith("<p>")) {
+    html = "<p>" + html + "</p>";
   }
-  
+
   return html;
 }
 
@@ -743,6 +950,64 @@ function getFaviconSVG() {
 // Embedded WebUI (v7.0 - UI & Auth Fix)
 // =================================================================================
 
+function getPasswordPageHTML(id) {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>访问受限 - 需要密码</title>
+  <style>
+    :root { --primary-color: #007bff; --light-gray: #f8f9fa; --gray: #6c757d; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--light-gray); color: #343a40; line-height: 1.6; margin: 0; padding: 2rem; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .container { max-width: 400px; background-color: #ffffff; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08); text-align: center; }
+    .lock-icon { font-size: 3rem; margin-bottom: 1rem; }
+    h1 { color: #333; margin-bottom: 1rem; }
+    p { color: var(--gray); margin-bottom: 2rem; }
+    .form-group { margin-bottom: 1.5rem; text-align: left; }
+    label { display: block; margin-bottom: 0.5rem; font-weight: 600; }
+    input[type="password"] { width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 6px; font-size: 1rem; box-sizing: border-box; }
+    .btn { background-color: var(--primary-color); color: white; border: none; padding: 0.75rem 2rem; border-radius: 6px; font-size: 1rem; cursor: pointer; width: 100%; }
+    .btn:hover { background-color: #0056b3; }
+    .error { color: #dc3545; margin-top: 1rem; display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="lock-icon">🔒</div>
+    <h1>内容受保护</h1>
+    <p>此分享内容需要密码才能访问</p>
+    
+    <form id="password-form">
+      <div class="form-group">
+        <label for="password">请输入访问密码</label>
+        <input type="password" id="password" placeholder="输入密码" required>
+      </div>
+      <button type="submit" class="btn">访问内容</button>
+    </form>
+    
+    <div id="error" class="error">密码错误，请重试</div>
+  </div>
+
+  <script>
+    document.getElementById('password-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      const password = document.getElementById('password').value;
+      if (password) {
+        window.location.href = '/share/${id}?pwd=' + encodeURIComponent(password);
+      }
+    });
+    
+    // 检查URL参数，如果有错误密码则显示错误信息
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('error') === 'invalid_password') {
+      document.getElementById('error').style.display = 'block';
+    }
+  </script>
+</body>
+</html>`;
+}
+
 function getSharePageHTML(metadata, id) {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -771,21 +1036,25 @@ function getSharePageHTML(metadata, id) {
     .content li { margin-bottom: 0.3rem; }
     .content strong { font-weight: 600; }
     .content em { font-style: italic; }
-    .audio-section { background-color: var(--light-gray); padding: 1.5rem; border-radius: 8px; margin: 2rem 0; text-align: center; }
-    .play-button { background-color: var(--success-color); color: white; border: none; padding: 1rem 2rem; border-radius: 50px; font-size: 1.1rem; cursor: pointer; margin-bottom: 1rem; display: inline-flex; align-items: center; gap: 0.5rem; }
+    .audio-section { background-color: var(--light-gray); padding: 1rem; border-radius: 8px; margin: 1.5rem 0; text-align: center; }
+    .play-button { background-color: var(--success-color); color: white; border: none; padding: 0.6rem 1.2rem; border-radius: 25px; font-size: 0.9rem; cursor: pointer; margin-bottom: 0.8rem; display: inline-flex; align-items: center; gap: 0.4rem; }
     .play-button:hover { background-color: #218838; }
-    .audio-player { width: 100%; margin-top: 1rem; display: none; }
+    .audio-player { width: 100%; margin-top: 0.8rem; display: none; }
     .footer { text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border-color); }
     .share-buttons { display: flex; justify-content: center; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
     .share-btn { padding: 0.5rem 1rem; border: none; border-radius: 6px; cursor: pointer; text-decoration: none; font-size: 0.9rem; }
     .share-copy { background-color: var(--primary-color); color: white; }
     .back-link { color: var(--gray); text-decoration: none; font-size: 0.9rem; }
     @media (max-width: 768px) {
-      .container { padding: 1rem; margin: 0.5rem; }
+      body { padding: 0; }
+      .container { padding: 1rem; margin: 0; border-radius: 0; box-shadow: none; }
       .title { font-size: 1.3rem; }
       .content h1 { font-size: 1.5rem; }
-      .play-button { padding: 0.8rem 1.5rem; font-size: 1rem; }
+      .audio-section { padding: 0.8rem; margin: 1rem 0; }
+      .play-button { padding: 0.5rem 1rem; font-size: 0.85rem; }
       .share-buttons { flex-direction: column; align-items: center; }
+      .header { margin-bottom: 1.5rem; padding-bottom: 0.8rem; }
+      .footer { margin-top: 1.5rem; padding-top: 0.8rem; }
     }
   </style>
 </head>
@@ -794,7 +1063,9 @@ function getSharePageHTML(metadata, id) {
     <div class="header">
       <div class="title">🎵 TTS 语音分享</div>
       <div class="meta">
-        ${formatDate(metadata.timestamp)} • ${metadata.voice} • ${formatFileSize(metadata.size)}
+        ${formatDate(metadata.timestamp)} • ${
+    metadata.voice
+  } • ${formatFileSize(metadata.size)}
       </div>
     </div>
     
@@ -817,6 +1088,21 @@ function getSharePageHTML(metadata, id) {
       </div>
       <div style="margin-top: 1rem;">
         <a href="/" class="back-link">← 返回 TTS 服务</a>
+      </div>
+      <div style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border-color); text-align: center; font-size: 0.85rem; color: var(--gray);">
+        <div style="display: flex; justify-content: center; align-items: center; gap: 1rem; flex-wrap: wrap;">
+          <a href="https://github.com/samni728/edgetts-cloudflare-workers-webui" target="_blank" style="display: flex; align-items: center; gap: 0.5rem; color: var(--gray); text-decoration: none;">
+            <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            GitHub 项目
+          </a>
+          <span>|</span>
+          <a href="https://github.com/samni728/edgetts-cloudflare-workers-webui" target="_blank" style="color: var(--gray); text-decoration: none;">⭐ Star</a>
+        </div>
+        <div style="margin-top: 0.5rem; font-size: 0.8rem;">
+          Powered by Edge TTS & Cloudflare Pages
+        </div>
       </div>
     </div>
   </div>
@@ -916,9 +1202,31 @@ function getHistoryPageHTML() {
     .item-summary { flex-grow: 1; font-weight: 600; color: #333; margin-bottom: 0.5rem; }
     .item-meta { font-size: 0.85rem; color: var(--gray); }
     .item-actions { display: flex; gap: 0.5rem; }
-    .btn { padding: 0.4rem 0.8rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+    
+    /* 历史记录移动端优化 */
+    @media (max-width: 768px) {
+      .container { padding: 1rem; margin: 0; border-radius: 0; box-shadow: none; }
+      body { padding: 0; }
+      .history-item { padding: 1rem; margin-bottom: 0.8rem; border-radius: 6px; }
+      .item-header { flex-direction: column; align-items: stretch; margin-bottom: 0.8rem; }
+      .item-actions { justify-content: space-between; margin-top: 0.8rem; gap: 0.3rem; }
+      .btn { padding: 0.6rem 0.4rem; font-size: 0.75rem; flex: 1; }
+      .item-summary { margin-bottom: 0.3rem; font-size: 0.95rem; }
+      .item-meta { font-size: 0.8rem; }
+      h1 { font-size: 1.3rem; margin-bottom: 1rem; }
+      .header { margin-bottom: 1rem; }
+      .back-btn { padding: 0.5rem 1rem; font-size: 0.85rem; }
+    }
+    .btn { padding: 0.5rem; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; margin: 0 0.2rem; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s; }
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     .btn-play { background-color: var(--success-color); color: white; }
+    .btn-play:hover { background-color: #218838; }
     .btn-share { background-color: var(--primary-color); color: white; }
+    .btn-share:hover { background-color: #0056b3; }
+    .btn-password { background-color: #ffc107; color: #212529; }
+    .btn-password:hover { background-color: #e0a800; }
+    .btn-delete { background-color: #dc3545; color: white; }
+    .btn-delete:hover { background-color: #c82333; }
     .loading { text-align: center; padding: 2rem; color: var(--gray); }
     .empty { text-align: center; padding: 3rem; color: var(--gray); }
     audio { width: 100%; margin-top: 1rem; }
@@ -937,7 +1245,17 @@ function getHistoryPageHTML() {
   <script>
     async function loadHistory() {
       try {
-        const response = await fetch('/api/history');
+        const apiKey = getCookie('apiKey');
+        if (!apiKey) {
+          document.getElementById('loading').innerHTML = '<div class="empty">请先设置 API Key 才能查看历史记录<br><a href="/">返回主页设置</a></div>';
+          return;
+        }
+        
+        const response = await fetch('/api/history', {
+          headers: {
+            'Authorization': \`Bearer \${apiKey}\`
+          }
+        });
         const data = await response.json();
         
         document.getElementById('loading').style.display = 'none';
@@ -954,11 +1272,30 @@ function getHistoryPageHTML() {
                 <div class="item-summary">\${item.summary}</div>
                 <div class="item-meta">
                   \${formatDate(item.timestamp)} • \${item.voice} • \${formatFileSize(item.size)}
+                  \${item.hasPassword ? ' • 🔒 已设密码' : ''}
                 </div>
               </div>
               <div class="item-actions">
-                <button class="btn btn-play" onclick="playAudio('\${item.id}')">▶️ 播放</button>
-                <button class="btn btn-share" onclick="shareItem('\${item.id}')">🔗 分享</button>
+                <button class="btn btn-play" onclick="playAudio('\${item.id}')" title="播放">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                  </svg>
+                </button>
+                <button class="btn btn-share" onclick="shareItem('\${item.id}')" title="分享">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/>
+                  </svg>
+                </button>
+                <button class="btn btn-password" onclick="setPassword('\${item.id}')" title="设置密码">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18,8h-1V6c0-2.76-2.24-5-5-5S7,3.24,7,6v2H6c-1.1,0-2,0.9-2,2v10c0,1.1,0.9,2,2,2h12c1.1,0,2-0.9,2-2V10C20,8.9,19.1,8,18,8z M12,17c-1.1,0-2-0.9-2-2s0.9-2,2-2s2,0.9,2,2S13.1,17,12,17z M15.1,8H8.9V6c0-1.71,1.39-3.1,3.1-3.1s3.1,1.39,3.1,3.1V8z"/>
+                  </svg>
+                </button>
+                <button class="btn btn-delete" onclick="deleteItem('\${item.id}')" title="删除">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                  </svg>
+                </button>
               </div>
             </div>
             <audio id="audio-\${item.id}" controls style="display: none;"></audio>
@@ -1047,6 +1384,78 @@ function getHistoryPageHTML() {
       });
     }
     
+    async function setPassword(id) {
+      const currentPassword = prompt('设置访问密码（留空则移除密码）:');
+      if (currentPassword === null) return; // 用户取消
+      
+      try {
+        const apiKey = getCookie('apiKey');
+        if (!apiKey) {
+          alert('请先设置 API Key');
+          return;
+        }
+        
+        const response = await fetch('/api/set-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': \`Bearer \${apiKey}\`
+          },
+          body: JSON.stringify({ id, password: currentPassword })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          alert(result.hasPassword ? '密码设置成功！' : '密码已移除！');
+          loadHistory(); // 刷新列表
+        } else {
+          const error = await response.json();
+          alert('设置失败: ' + error.error.message);
+        }
+      } catch (error) {
+        alert('设置失败: ' + error.message);
+      }
+    }
+    
+    async function deleteItem(id) {
+      if (!confirm('确定要删除这个语音记录吗？此操作不可恢复！')) {
+        return;
+      }
+      
+      try {
+        const apiKey = getCookie('apiKey');
+        if (!apiKey) {
+          alert('请先设置 API Key');
+          return;
+        }
+        
+        const response = await fetch('/api/delete', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': \`Bearer \${apiKey}\`
+          },
+          body: JSON.stringify({ id })
+        });
+        
+        if (response.ok) {
+          alert('删除成功！');
+          loadHistory(); // 刷新列表
+        } else {
+          const error = await response.json();
+          alert('删除失败: ' + error.error.message);
+        }
+      } catch (error) {
+        alert('删除失败: ' + error.message);
+      }
+    }
+    
+    function getCookie(name) {
+      const value = \`; \${document.cookie}\`;
+      const parts = value.split(\`; \${name}=\`);
+      if (parts.length === 2) return parts.pop().split(';').shift();
+    }
+    
     loadHistory();
   </script>
 </body>
@@ -1076,10 +1485,45 @@ function getWebUIHTML() {
       .slider-group { display: flex; align-items: center; gap: 1rem; }
       .slider-group input[type="range"] { flex-grow: 1; padding: 0; }
       .slider-group span { font-weight: 500; min-width: 40px; text-align: right; }
-      .button-group { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 2rem; }
+      
+      /* 按钮布局优化 */
+      .action-section { margin-top: 2rem; }
+      .all-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+      
+      /* 桌面端历史记录按钮居中 */
+      @media (min-width: 769px) {
+        .all-buttons { grid-template-columns: 1fr 1fr auto; align-items: center; }
+        .secondary-btn { justify-self: center; min-width: 160px; }
+      }
+      .usage-tips { margin-top: 0.8rem; padding: 0.8rem; background-color: #e7f3ff; border-radius: 6px; font-size: 0.85rem; color: #004085; }
+      
       button { font-weight: 600; cursor: pointer; }
-      #btn-generate { background-color: var(--primary-color); color: white; border-color: var(--primary-color); }
-      #btn-stream { background-color: var(--success-color); color: white; border-color: var(--success-color); }
+      .primary-btn { background-color: var(--primary-color); color: white; border-color: var(--primary-color); }
+      .stream-btn { background-color: var(--success-color); color: white; border-color: var(--success-color); }
+      .secondary-btn { background-color: var(--gray); color: white; border: none; padding: 0.6rem 1.5rem; border-radius: 8px; width: auto; }
+      
+      /* 移动端优化 */
+      @media (max-width: 768px) {
+        .container { padding: 1rem; margin: 0; border-radius: 0; box-shadow: none; }
+        body { padding: 0; }
+        .action-section { margin-top: 1rem; }
+        .all-buttons { grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
+        .primary-btn { padding: 0.7rem 0.3rem; font-size: 0.8rem; }
+        .secondary-btn { padding: 0.7rem 0.3rem; font-size: 0.8rem; }
+        .usage-tips { font-size: 0.8rem; padding: 0.6rem; margin-top: 0.5rem; }
+        .usage-tips ul { margin: 0.3rem 0 0 1rem; }
+        .usage-tips li { margin-bottom: 0.2rem; }
+        
+        /* 使用提示布局修复 */
+        .usage-tips > div:first-child { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; white-space: nowrap; }
+        #dismiss-tips { flex-shrink: 0; margin-left: 0.5rem; }
+        
+        /* 表单组件紧凑化 */
+        .form-group { margin-bottom: 1rem; }
+        details { padding: 0.8rem; margin-bottom: 1rem; }
+        input, select, textarea { padding: 0.6rem 0.8rem; }
+        h1 { margin-bottom: 1.5rem; font-size: 1.5rem; }
+      }
       #status { margin-top: 1.5rem; padding: 1rem; border-radius: 8px; text-align: center; font-weight: 500; display: none; }
       .status-info { background-color: #e7f3ff; color: #004085; }
       .status-success { background-color: #d4edda; color: #155724; }
@@ -1094,7 +1538,7 @@ function getWebUIHTML() {
   </head>
   <body>
     <main class="container">
-      <h1>TTS 服务终极测试页面 (v7.0)</h1>
+      <h1>CF-TTS Proxy Server (v1.1)</h1>
       <details id="api-config" open>
         <summary>API 配置</summary>
         <div class="form-group" style="margin-top: 1rem">
@@ -1117,15 +1561,68 @@ function getWebUIHTML() {
       </div>
       <div class="grid-layout">
         <div class="form-group">
-          <label for="voice">选择音色 (Model)</label>
+          <label for="voice">选择音色 (Voice)</label>
           <select id="voice">
-            <option value="tts-1-shimmer">shimmer (温柔女声)</option>
-            <option value="tts-1-alloy" selected>alloy (专业男声)</option>
-            <option value="tts-1-fable">fable (激情男声)</option>
-            <option value="tts-1-onyx">onyx (活泼女声)</option>
-            <option value="tts-1-nova">nova (阳光男声)</option>
-            <option value="tts-1-echo">echo (东北女声)</option>
+            <option value="shimmer">shimmer (温柔女声)</option>
+            <option value="alloy" selected>alloy (专业男声)</option>
+            <option value="fable">fable (激情男声)</option>
+            <option value="onyx">onyx (活泼女声)</option>
+            <option value="nova">nova (阳光男声)</option>
+            <option value="echo">echo (东北女声)</option>
+            <option value="custom">🎛️ 自定义音色配置</option>
           </select>
+        </div>
+        
+        <div id="custom-voice-config" style="display: none; grid-column: 1 / -1;">
+          <div class="form-group">
+            <label for="customVoiceName">自定义音色名称 (ShortName)</label>
+            <input type="text" id="customVoiceName" placeholder="例如: zh-CN-XiaoxiaoNeural" />
+            <small style="color: #666; font-size: 0.85rem; display: block; margin-top: 0.3rem;">完整的音色标识符，如 zh-CN-XiaoxiaoNeural</small>
+          </div>
+          <div class="grid-layout" style="margin-top: 1rem;">
+            <div class="form-group">
+              <label for="voiceStyle">语音风格 (可选)</label>
+              <select id="voiceStyle">
+                <option value="">默认风格</option>
+                <option value="angry">愤怒 (angry)</option>
+                <option value="cheerful">开朗 (cheerful)</option>
+                <option value="excited">兴奋 (excited)</option>
+                <option value="friendly">友好 (friendly)</option>
+                <option value="hopeful">希望 (hopeful)</option>
+                <option value="sad">悲伤 (sad)</option>
+                <option value="shouting">呐喊 (shouting)</option>
+                <option value="terrified">恐惧 (terrified)</option>
+                <option value="unfriendly">不友好 (unfriendly)</option>
+                <option value="whispering">耳语 (whispering)</option>
+                <option value="gentle">温柔 (gentle)</option>
+                <option value="lyrical">抒情 (lyrical)</option>
+                <option value="newscast">新闻播报 (newscast)</option>
+                <option value="poetry-reading">诗歌朗诵 (poetry-reading)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="voiceRole">角色扮演 (可选)</label>
+              <select id="voiceRole">
+                <option value="">默认角色</option>
+                <option value="Girl">女孩</option>
+                <option value="Boy">男孩</option>
+                <option value="YoungAdultFemale">年轻女性</option>
+                <option value="YoungAdultMale">年轻男性</option>
+                <option value="OlderAdultFemale">成年女性</option>
+                <option value="OlderAdultMale">成年男性</option>
+                <option value="SeniorFemale">老年女性</option>
+                <option value="SeniorMale">老年男性</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>风格强度 (可选)</label>
+              <div class="slider-group">
+                <input type="range" id="styleDegree" min="0.01" max="2" step="0.01" value="1" />
+                <span id="styleDegreeValue">1.00</span>
+              </div>
+              <small style="color: #666; font-size: 0.85rem; display: block; margin-top: 0.3rem;">控制语音风格的强度，范围 0.01-2.00</small>
+            </div>
+          </div>
         </div>
         <div class="form-group">
           <label>语速</label>
@@ -1148,7 +1645,7 @@ function getWebUIHTML() {
           <label><input type="checkbox" id="removeMarkdown" checked />移除 Markdown</label>
           <label><input type="checkbox" id="removeEmoji" checked />移除 Emoji</label>
           <label><input type="checkbox" id="removeUrls" checked />移除 URL</label>
-          <label><input type="checkbox" id="removeLineBreaks" />移除所有换行</label>
+          <label><input type="checkbox" id="removeLineBreaks" checked />移除所有换行</label>
           <label><input type="checkbox" id="removeCitation" checked />移除引用标记[数字]</label>
         </div>
         <div class="form-group" style="margin-top: 1rem; margin-bottom: 0">
@@ -1156,20 +1653,34 @@ function getWebUIHTML() {
           <input type="text" id="customKeywords" placeholder="例如: ABC,XYZ" />
         </div>
       </details>
-      <div style="margin-bottom: 1rem;">
-        <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: normal;">
-          <input type="checkbox" id="saveToHistory" style="width: auto; margin: 0;" />
-          保存到历史记录 (可分享)
-        </label>
-      </div>
-      <div class="button-group">
-        <button id="btn-generate">生成语音 (标准)</button>
-        <button id="btn-stream">生成语音 (流式)</button>
-      </div>
-      <div style="margin-top: 1rem; text-align: center;">
-        <button id="btn-history" style="background-color: #6c757d; color: white; width: auto; padding: 0.6rem 1.5rem;">
-          📚 查看历史记录
-        </button>
+      <div class="action-section">
+        <div style="margin-bottom: 1rem;">
+          <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: normal;">
+            <input type="checkbox" id="saveToHistory" style="width: auto; margin: 0;" />
+            保存到历史记录 (可分享)
+          </label>
+        </div>
+        
+        <div class="all-buttons">
+          <button id="btn-generate" class="primary-btn">生成语音 (标准)</button>
+          <button id="btn-stream" class="primary-btn stream-btn">生成语音 (流式)</button>
+          <button id="btn-history" class="secondary-btn">📚 历史记录</button>
+        </div>
+        
+        <div id="usage-tips" class="usage-tips" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.5rem;">
+            <strong>💡 使用提示：</strong>
+            <button id="dismiss-tips" style="background: none; border: none; color: #004085; cursor: pointer; padding: 0; font-size: 1.2rem; line-height: 1;" title="我知道了，不再显示">×</button>
+          </div>
+          <ul style="margin: 0 0 0.5rem 1.2rem; padding: 0;">
+            <li><strong>标准模式</strong>：适合所有设备，生成完整音频后播放，稳定可靠</li>
+            <li><strong>流式模式</strong>：桌面端可快速开始播放，移动端自动切换为标准模式</li>
+            <li><strong>长文本</strong>：超过1万字建议使用标准模式，更稳定</li>
+          </ul>
+          <div style="text-align: center;">
+            <button id="confirm-tips" style="background-color: #004085; color: white; border: none; padding: 0.4rem 1rem; border-radius: 4px; font-size: 0.8rem; cursor: pointer;">我知道了</button>
+          </div>
+        </div>
       </div>
       <div id="status"></div>
       <audio id="audioPlayer" controls></audio>
@@ -1222,6 +1733,15 @@ function getWebUIHTML() {
           removeCitation: document.getElementById("removeCitation"),
           customKeywords: document.getElementById("customKeywords"),
           saveToHistory: document.getElementById("saveToHistory"),
+          customVoiceConfig: document.getElementById("custom-voice-config"),
+          customVoiceName: document.getElementById("customVoiceName"),
+          voiceStyle: document.getElementById("voiceStyle"),
+          voiceRole: document.getElementById("voiceRole"),
+          styleDegree: document.getElementById("styleDegree"),
+          styleDegreeValue: document.getElementById("styleDegreeValue"),
+          usageTips: document.getElementById("usage-tips"),
+          dismissTips: document.getElementById("dismiss-tips"),
+          confirmTips: document.getElementById("confirm-tips"),
         };
 
         const setCookie = (name, value, days = 30) => {
@@ -1238,6 +1758,19 @@ function getWebUIHTML() {
           return "";
         };
 
+        // 使用提示管理
+        const initUsageTips = () => {
+          const tipsHidden = getCookie("usageTipsHidden");
+          if (!tipsHidden) {
+            elements.usageTips.style.display = "block";
+          }
+        };
+
+        const hideUsageTips = () => {
+          elements.usageTips.style.display = "none";
+          setCookie("usageTipsHidden", "true", 365); // 记住一年
+        };
+
         const updateStatus = (message, type, persistent = false) => {
           elements.status.textContent = message;
           elements.status.className = \`status-\${type}\`;
@@ -1252,16 +1785,56 @@ function getWebUIHTML() {
           const apiKey = elements.apiKey.value.trim();
           let authHeader = apiKey ? \`--header 'Authorization: Bearer \${apiKey}' \\\\\` : '# API Key not set, authorization header is commented out';
           
-          const curlCommand = \`# Standard Request
+          const voiceValue = elements.voice.value === 'custom' ? 
+            (elements.customVoiceName.value.trim() || 'zh-CN-XiaoxiaoNeural') : 
+            elements.voice.value;
+          
+          const curlCommand = \`# OpenAI Compatible Request
 curl --location '\${baseUrl}/v1/audio/speech' \\\\
 \${authHeader}
 --header 'Content-Type: application/json' \\\\
 --data '{
-    "model": "\${elements.voice.value}",
-    "input": "你好，世界！",
-    "speed": \${elements.speed.value}
+    "model": "tts-1",
+    "voice": "\${voiceValue}",
+    "input": "你好，世界！这是一个测试语音合成的示例。",
+    "speed": \${elements.speed.value},
+    "pitch": \${elements.pitch.value}
 }' \\\\
---output speech.mp3\`;
+--output speech.mp3
+
+# 高级功能示例 (自定义音色配置)
+curl --location '\${baseUrl}/v1/audio/speech' \\\\
+\${authHeader}
+--header 'Content-Type: application/json' \\\\
+--data '{
+    "model": "tts-1",
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "input": "这是使用高级配置的语音合成示例。",
+    "style": "cheerful",
+    "role": "YoungAdultFemale",
+    "styleDegree": 1.5,
+    "speed": 1.2,
+    "pitch": 1.1,
+    "cleaning_options": {
+        "remove_markdown": true,
+        "remove_emoji": true,
+        "remove_urls": true,
+        "remove_line_breaks": false
+    }
+}' \\\\
+--output advanced.mp3
+
+# 流式请求示例 (长文本优化)
+curl --location '\${baseUrl}/v1/audio/speech' \\\\
+\${authHeader}
+--header 'Content-Type: application/json' \\\\
+--data '{
+    "model": "tts-1",
+    "voice": "alloy",
+    "input": "这是一个流式请求的示例，适用于较长的文本内容。",
+    "stream": true
+}' \\\\
+--output streaming.mp3\`;
           elements.curlCode.textContent = curlCommand;
         };
 
@@ -1280,6 +1853,9 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
           updateCurlExample();
         });
 
+        // 设备检测函数
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
         // Generate speech function with retry mechanism
         const generateSpeech = async (isStream = false, retryCount = 0) => {
           const apiKey = elements.apiKey.value.trim();
@@ -1295,6 +1871,12 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
             return;
           }
 
+          // 【核心优化】移动端流式降级为标准模式
+          if (isStream && isMobile) {
+            console.log("Mobile device detected. Downgrading stream to standard request for compatibility.");
+            isStream = false;
+          }
+
           const maxRetries = 2;
           const statusMessage = retryCount > 0 ? 
             \`正在重试生成语音... (第\${retryCount + 1}次尝试)\` : 
@@ -1305,9 +1887,17 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
           elements.audioPlayer.src = "";
 
           try {
+            const voiceConfig = getVoiceConfig();
             const requestBody = {
-              model: elements.voice.value, input: text,
-              speed: parseFloat(elements.speed.value), pitch: parseFloat(elements.pitch.value), stream: isStream,
+              model: "tts-1", // 符合 OpenAI 标准
+              input: text,
+              voice: voiceConfig.voice,
+              speed: parseFloat(elements.speed.value), 
+              pitch: parseFloat(elements.pitch.value), 
+              style: voiceConfig.style,
+              role: voiceConfig.role,
+              styleDegree: voiceConfig.styleDegree,
+              stream: isStream,
               cleaning_options: {
                 remove_markdown: elements.removeMarkdown.checked, remove_emoji: elements.removeEmoji.checked,
                 remove_urls: elements.removeUrls.checked, remove_line_breaks: elements.removeLineBreaks.checked,
@@ -1316,7 +1906,7 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
             };
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+            const timeoutId = setTimeout(() => controller.abort(), 45000); // 45秒超时
 
             const response = await fetch(\`\${elements.baseUrl.value}/v1/audio/speech\`, {
               method: "POST",
@@ -1425,7 +2015,7 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
             // Create FormData to send binary data directly
             const formData = new FormData();
             formData.append('text', requestBody.input);
-            formData.append('voice', requestBody.model);
+            formData.append('voice', requestBody.voice); // 使用 voice 而不是 model
             formData.append('speed', requestBody.speed.toString());
             formData.append('pitch', requestBody.pitch.toString());
             formData.append('cleaningOptions', JSON.stringify(requestBody.cleaning_options));
@@ -1452,8 +2042,18 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
         elements.btnGenerate.addEventListener("click", () => generateSpeech(false));
         elements.btnStream.addEventListener("click", () => generateSpeech(true));
         elements.btnHistory.addEventListener("click", () => {
+          const apiKey = getCookie("apiKey");
+          if (!apiKey) {
+            updateStatus("请先设置 API Key 才能查看历史记录", "error");
+            elements.apiConfig.open = true;
+            return;
+          }
           window.open('/history', '_blank');
         });
+        
+        // 使用提示事件监听
+        elements.dismissTips.addEventListener("click", hideUsageTips);
+        elements.confirmTips.addEventListener("click", hideUsageTips);
         elements.copyCurl.addEventListener("click", () => {
           navigator.clipboard.writeText(elements.curlCode.textContent).then(() => {
             elements.copyCurl.textContent = "已复制!";
@@ -1468,13 +2068,42 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
           elements.inputText.value = ""; 
           elements.charCount.textContent = "0 字符"; 
         });
+        // Handle custom voice configuration visibility
+        const toggleCustomVoiceConfig = () => {
+          const isCustom = elements.voice.value === 'custom';
+          elements.customVoiceConfig.style.display = isCustom ? 'block' : 'none';
+        };
+
+        // Get effective voice configuration
+        const getVoiceConfig = () => {
+          if (elements.voice.value === 'custom') {
+            return {
+              voice: elements.customVoiceName.value.trim() || 'zh-CN-XiaoxiaoNeural',
+              style: elements.voiceStyle.value || 'general',
+              role: elements.voiceRole.value || '',
+              styleDegree: parseFloat(elements.styleDegree.value)
+            };
+          } else {
+            return {
+              voice: elements.voice.value,
+              style: 'general',
+              role: '',
+              styleDegree: 1.0
+            };
+          }
+        };
+
         const updateUI = () => {
           elements.speedValue.textContent = parseFloat(elements.speed.value).toFixed(2);
           elements.pitchValue.textContent = parseFloat(elements.pitch.value).toFixed(2);
+          elements.styleDegreeValue.textContent = parseFloat(elements.styleDegree.value).toFixed(2);
+          toggleCustomVoiceConfig();
           updateCurlExample();
         };
+        
         ['speed', 'voice', 'apiKey'].forEach(id => elements[id].addEventListener('input', updateUI));
         ['pitch'].forEach(id => elements[id].addEventListener('input', () => elements.pitchValue.textContent = parseFloat(elements.pitch.value).toFixed(2)));
+        elements.styleDegree.addEventListener('input', () => elements.styleDegreeValue.textContent = parseFloat(elements.styleDegree.value).toFixed(2));
 
 
         // Initial page setup
@@ -1487,6 +2116,10 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
             elements.apiConfig.open = true;
         }
         elements.charCount.textContent = \`\${elements.inputText.value.length} 字符\`;
+        
+        // 初始化使用提示
+        initUsageTips();
+        
         updateUI();
       });
     </script>
