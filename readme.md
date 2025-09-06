@@ -6,12 +6,18 @@
 
 ## 📦 版本发布
 
-### v1.0 发布包
+### v1.1 发布包
 
-- **`cf-tts_v1.zip`** - 完整的 v1.0 版本发布包，包含所有必要文件
+- **`cf-tts_v1.1.zip`** - 完整的 v1.1 版本发布包，包含所有必要文件
 - **`_worker.js`** - 核心服务文件，包含完整的服务端逻辑和嵌入式 WebUI
 
-**推荐使用方式**：直接下载 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 进行部署，或单独使用 `_worker.js` 文件。
+**推荐使用方式**：直接下载 [v1.1 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.1) 进行部署，或单独使用 `_worker.js` 文件。
+
+### 🆕 v1.1 更新内容
+
+- **🐛 修复换行符处理 bug**：解决了文本清理功能中换行符保留/移除的逻辑错误
+- **📦 优化部署包**：只包含 `_worker.js` 文件，适合 Cloudflare Pages 直接部署
+- **⚡ 文件大小优化**：9.6KB（压缩率 70%）
 
 ---
 
@@ -68,7 +74,7 @@
 
 **方式一：使用发布包（推荐）**
 
-- 下载 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 中的发布包
+- 下载 [v1.1 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.1) 中的发布包
 - 在 Cloudflare Pages 的 WebUI 中直接拖放下载的 zip 文件
 - 系统会自动解压并部署所有文件
 
@@ -297,17 +303,17 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
 
 ## 📄 项目文件说明
 
-- **`cf-tts_v1.zip`**: v1.0 cf webui 部署需要使用包或者带目录才可拖放
+- **`cf-tts_v1.1.zip`**: v1.1 cf webui 部署需要使用包或者带目录才可拖放
 - **`_worker.js`**: 核心服务文件，包含完整的服务端逻辑和嵌入式 WebUI。集成了 API 路由、认证、文本清理、Android App 模拟的 TTS 调用、以及功能完整的测试界面
 - **`API_KEY.jpg`**: 配置示例图片，展示如何在 Cloudflare Pages 中设置环境变量
 
-**部署建议**：优先使用 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 发布包，或单独部署 `_worker.js` 文件。
+**部署建议**：优先使用 [v1.1 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.1) 发布包，或单独部署 `_worker.js` 文件。
 
 ### 🔧 高级自定义配置
 
 如果您需要自定义音色映射或其他配置，可以：
 
-1. **下载源码**：从 [v1.0.0 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.0.0) 下载发布包
+1. **下载源码**：从 [v1.1 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.1) 下载发布包
 2. **修改配置**：编辑 `_worker.js` 文件中的相关配置
 3. **重新部署**：将修改后的文件重新部署到 Cloudflare Pages
 
