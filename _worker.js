@@ -363,9 +363,14 @@ function cleanText(text, options) {
     cleanedText = cleanedText.replace(/\p{Emoji_Presentation}/gu, "");
   if (options.remove_citation_numbers)
     cleanedText = cleanedText.replace(/\[\d+\]/g, "").replace(/【\d+】/g, "");
-  if (options.remove_line_breaks)
+  if (options.remove_line_breaks) {
     cleanedText = cleanedText.replace(/(\r\n|\n|\r)/gm, " ");
-  return cleanedText.trim().replace(/\s+/g, " ");
+    // 只有在移除换行符时才合并多个空格
+    return cleanedText.trim().replace(/\s+/g, " ");
+  } else {
+    // 保留换行符，只合并非换行的连续空格
+    return cleanedText.trim().replace(/[ \t]+/g, " ");
+  }
 }
 
 async function hmacSha256(key, data) {
