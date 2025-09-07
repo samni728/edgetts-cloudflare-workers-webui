@@ -1508,6 +1508,9 @@ function getRealtimeSharePageHTML(metadata, id) {
     </div>
     
     <div class="footer">
+      <div class="share-buttons" style="display: flex; justify-content: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap;">
+        <button class="share-btn share-copy" onclick="copyLink()" style="padding: 0.5rem 1rem; border: none; border-radius: 6px; cursor: pointer; text-decoration: none; font-size: 0.9rem; background-color: var(--primary-color); color: white;">📋 复制链接</button>
+      </div>
       <div style="margin-bottom: 1rem;">
         <a href="/" style="color: var(--gray); text-decoration: none;">← 返回 TTS 服务</a>
       </div>
@@ -1658,6 +1661,24 @@ function getRealtimeSharePageHTML(metadata, id) {
         button.disabled = false;
         alert('语音生成失败: ' + error.message);
       }
+    }
+    
+    function copyLink() {
+      // 移除URL中的密码参数，确保分享链接不包含密码
+      const url = new URL(window.location.href);
+      url.searchParams.delete('pwd'); // 移除密码参数
+      const cleanUrl = url.toString();
+      
+      navigator.clipboard.writeText(cleanUrl).then(() => {
+        const btn = document.querySelector('.share-copy');
+        const originalText = btn.textContent;
+        btn.textContent = '✅ 已复制';
+        setTimeout(() => {
+          btn.textContent = originalText;
+        }, 2000);
+      }).catch(() => {
+        prompt('复制链接:', cleanUrl);
+      });
     }
   </script>
 </body>
