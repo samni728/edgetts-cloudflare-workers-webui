@@ -1,4 +1,4 @@
-# CF-TTS Proxy Server (v1.1)
+# CF-TTS Proxy Server (v1.2)
 
 一个部署在 Cloudflare Pages 上的高性能文本转语音（TTS）代理服务，将微软 Edge TTS 封装成兼容 OpenAI API 的接口。
 
@@ -8,8 +8,13 @@
 - **🗣️ 高质量音色**: 利用微软 Edge TTS 的自然神经网络语音
 - **⚡ 流式播放**: 支持流式和标准两种响应模式，降低长文本延迟
 - **🧠 智能文本清理**: 自动处理 Markdown、Emoji、URL、引用标记等
-- **🗄️ 历史记录**: 自动保存 TTS 生成历史，支持分享和密码保护
+- **🗄️ 智能历史记录**: 支持两种保存模式
+  - **音频+文本保存**: 完整音频文件存储，速度快，适合有声书制作
+  - **文本+流式播放**: 仅保存文本，实时生成音频，不占存储空间
+- **📖 有声书功能**: 支持 Markdown 格式分享，自动优化 TTS 文本转换
+- **🔗 跨设备分享**: 带密码保护的分享链接，可作为临时信息传递工具
 - **🔐 安全访问**: API 密钥验证，确保服务安全
+- **🆔 智能用户ID**: 基于部署域名自动生成唯一用户ID，避免多部署冲突
 - **💻 内置 WebUI**: 功能完整的测试界面，无需编程即可使用
 
 ## 🚀 快速部署
@@ -18,66 +23,61 @@
 
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com)
 2. 点击 **Workers 和 Pages** → **创建应用程序** → **Pages** → **上传资产**
-3. 上传 `_worker.js` 文件到项目根目录
+3. 上传 [v1.2 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.2) 在添加变量和 kv 后务必在重新部署一次才能生效！
 
 ### 2. 配置环境变量
 
 #### 设置 API 密钥
-
-1. 进入项目设置 → **环境变量**
-2. 添加环境变量：
-   - **类型**: `密钥 (Secret)`
+1. 在项目设置中找到 **环境变量**
+2. 添加变量：
    - **变量名**: `API_KEY`
-   - **值**: 输入您的密钥（如 `sk-my-secret-key-12345`）
+   - **值**: 任意字符串（用于 API 访问控制）
+   - **加密**: ✅ 勾选
 
-![配置API_KEY环境变量](screenshorts/API_KEY.jpg)
+![API_KEY 配置示例](screenshorts/API_KEY.jpg)
 
-#### 配置 KV 存储（可选）
+### 3. 配置 KV 存储（必需）
 
-如需使用历史记录和分享功能，需要配置 KV 存储：
-
-**步骤 1：创建 KV 命名空间**
-1. 在 Cloudflare Dashboard 点击 **Workers 和 Pages** → **KV**
+#### 创建 KV 存储
+1. 在 Cloudflare Dashboard 中，进入 **Workers 和 Pages** → **KV**
 2. 点击 **创建命名空间**
-3. 输入名称（如 `tts_kv`）并创建
+3. 命名空间名称：`TTS_HISTORY`
+4. 点击 **添加**
 
-![创建KV命名空间](screenshorts/kv_1.png)
+![KV 创建步骤 1](screenshorts/kv_1.png)
 
-**步骤 2：绑定 KV 到 Pages 项目**
-1. 返回 Pages 项目 → **设置** → **绑定**
-2. 点击 **+ 添加** → **KV 命名空间**
-3. 配置绑定：
-   - **变量名称**: `TTS_HISTORY`
-   - **KV 命名空间**: 选择刚创建的命名空间
+#### 绑定 KV 到 Pages 项目
+1. 进入你的 Pages 项目设置
+2. 找到 **设置** → **函数** → **KV 命名空间绑定**
+3. 点击 **添加绑定**
+4. 配置：
+   - **变量名**: `TTS_HISTORY`
+   - **KV 命名空间**: 选择刚创建的 `TTS_HISTORY`
+5. 点击 **保存并部署**
 
-![绑定KV到Pages项目](screenshorts/kv_2.png)
+![KV 绑定步骤 2](screenshorts/kv_2.png)
 
-![配置KV存储完成](screenshorts/kv_3_TTS_HISTORY.jpg)
+![KV 绑定步骤 3](screenshorts/kv_3_TTS_HISTORY.jpg)
 
-![KV配置验证](screenshorts/kv_4.png)
+![KV 绑定步骤 4](screenshorts/kv_4.png)
 
-### 3. 部署和访问
+## 📖 使用方法
 
-1. 点击 **创建新部署** 完成部署
-2. 访问 `https://your-project-name.pages.dev/`
-3. 在 WebUI 中输入 API 密钥开始使用
+### WebUI 界面
+访问你的 Pages 域名，即可使用内置的 WebUI 界面进行测试。
 
-⚠️ **重要**: 修改环境变量后必须重新部署才能生效！
-
-## 🛠️ API 使用
-
-### 基本请求
+### API 调用示例
 
 ```bash
-curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer YOUR_API_KEY" \
-     -d '{
-         "model": "tts-1",
-         "voice": "shimmer",
-         "input": "你好，世界！",
-         "stream": false
-     }' --output audio.mp3
+curl -X POST "https://your-domain.pages.dev/v1/audio/speech" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts-1",
+    "voice": "shimmer",
+    "input": "你好，世界！",
+    "stream": false
+  }' --output audio.mp3
 ```
 
 ### 主要参数
@@ -92,6 +92,12 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
 | `stream` | boolean | `false` | 是否流式响应 |
 | `cleaning_options` | object | `{...}` | 文本清理选项 |
 
+### 智能用户ID机制
+- **自动生成**: 基于部署域名自动生成唯一的16位十六进制用户ID
+- **避免冲突**: 每个 Cloudflare Pages 域名都有独特的用户ID，防止多部署间的冲突
+- **稳定性**: 同一域名的用户ID保持固定，不会频繁变化
+- **兼容性**: 如果域名解析失败，自动回退到默认用户ID
+
 ### 音色选择
 
 #### OpenAI 兼容音色
@@ -102,25 +108,36 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
 - `nova` - 阳光男声
 - `echo` - 东北女声
 
-#### 微软原生音色（推荐）
-- `zh-CN-XiaoxiaoNeural` - 晓晓，温柔女声
-- `zh-CN-YunyangNeural` - 云扬，专业男声
-- `zh-CN-YunxiNeural` - 云希，阳光男声
+#### 高级参数
+- `style` - 语音风格（general, chat, news, etc.）
+- `role` - 角色扮演（YoungAdultFemale, etc.）
+- `styleDegree` - 风格强度 (0.01-2.0)
 
-📁 **完整音色列表**: 查看 `tts_list/` 目录中的音色列表文件
+### 文本清理选项
 
-### 流式请求示例
+```json
+{
+  "remove_markdown": true,
+  "remove_emoji": true,
+  "remove_urls": true,
+  "remove_line_breaks": false,
+  "remove_citation_numbers": true,
+  "custom_keywords": "关键词1,关键词2"
+}
+```
+
+### 流式播放示例
 
 ```bash
-curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
-     -H "Content-Type: application/json" \
-     -H "Authorization: Bearer YOUR_API_KEY" \
-     -d '{
-         "model": "tts-1",
-         "voice": "nova",
-         "input": "这是一个长文本示例...",
-         "stream": true
-     }' --output streaming.mp3
+curl -X POST "https://your-domain.pages.dev/v1/audio/speech" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "tts-1",
+    "voice": "nova",
+    "input": "这是一个长文本示例...",
+    "stream": true
+  }' --output streaming.mp3
 ```
 
 ## �� 项目文件
@@ -138,5 +155,12 @@ curl -X POST "https://your-project-name.pages.dev/v1/audio/speech" \
 ## 🔗 相关链接
 
 - [GitHub 项目](https://github.com/samni728/edgetts-cloudflare-workers-webui)
-- [v1.1 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.1)
+- [v1.2 Release](https://github.com/samni728/edgetts-cloudflare-workers-webui/releases/tag/v1.2)
 - [Edge TTS 音色列表](https://learn.microsoft.com/zh-cn/azure/ai-services/speech-service/language-support?tabs=tts#multilingual-voices)
+
+## ⚖️ 使用声明
+
+- 本服务基于微软 Edge TTS 技术，提供文本转语音功能
+- 用户数据存储在用户自己的 Cloudflare KV 中，完全由用户控制
+- 请遵守相关法律法规，不得用于违法用途
+- 使用本服务即表示您同意相关条款
