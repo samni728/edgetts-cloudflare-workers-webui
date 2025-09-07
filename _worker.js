@@ -858,24 +858,9 @@ async function getVoiceStream(
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
 
-  const startedAt = Date.now();
-  let totalBytes = 0;
-  let chunkIndex = 0;
-  console.log("[stream] start", {
-    chunks: chunks.length,
-    voiceName,
-    rate,
-    pitch,
-    style,
-    role,
-    styleDegree,
-    outputFormat,
-  });
-
   (async () => {
     try {
       for (const chunk of chunks) {
-        const t0 = Date.now();
         const audioBlob = await getAudioChunk(
           chunk,
           voiceName,
@@ -888,42 +873,16 @@ async function getVoiceStream(
         );
         const arrayBuffer = await audioBlob.arrayBuffer();
         await writer.write(new Uint8Array(arrayBuffer));
-        totalBytes += arrayBuffer.byteLength;
-        console.log("[stream] chunk", {
-          index: ++chunkIndex,
-          bytes: arrayBuffer.byteLength,
-          elapsedMs: Date.now() - t0,
-          totalBytes,
-        });
       }
     } catch (error) {
-      console.error(
-        "[stream] error",
-        error && (error.stack || error.message || error)
-      );
       await writer.abort(error);
     } finally {
       await writer.close();
-      console.log("[stream] end", {
-        totalBytes,
-        totalChunks: chunkIndex,
-        totalMs: Date.now() - startedAt,
-      });
-      
-      // 如果总字节数为0，记录警告
-      if (totalBytes === 0) {
-        console.warn("[stream] WARNING: Stream completed with 0 bytes - this indicates a potential issue");
-      }
     }
   })();
 
   return new Response(readable, {
-    headers: {
-      "Content-Type": "audio/mpeg",
-      "Cache-Control": "no-store",
-      "X-Stream": "1",
-      ...makeCORSHeaders(),
-    },
+    headers: { "Content-Type": "audio/mpeg", ...makeCORSHeaders() },
   });
 }
 
@@ -937,76 +896,47 @@ async function getAudioChunk(
   styleDegree,
   outputFormat
 ) {
-  // 重试机制：最多重试3次
-  let lastError;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const endpoint = await getEndpoint();
-      const url = `https://${endpoint.r}.tts.speech.microsoft.com/cognitiveservices/v1`;
+  const endpoint = await getEndpoint();
+  const url = `https://${endpoint.r}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
-      // 构建高级SSML
-      const escapedText = text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+  // 构建高级SSML
+  const escapedText = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 
-      let ssmlContent = `<prosody rate="${rate}%" pitch="${pitch}%">${escapedText}</prosody>`;
+  let ssmlContent = `<prosody rate="${rate}%" pitch="${pitch}%">${escapedText}</prosody>`;
 
-      // 添加语音风格和强度
-      if (style && style !== "general") {
-        const styleAttributes =
-          styleDegree !== 1.0 ? ` styledegree="${styleDegree}"` : "";
-        ssmlContent = `<mstts:express-as style="${style}"${styleAttributes}>${ssmlContent}</mstts:express-as>`;
-      }
-
-      // 添加角色扮演
-      if (role) {
-        ssmlContent = `<mstts:express-as role="${role}">${ssmlContent}</mstts:express-as>`;
-      }
-
-      const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}">${ssmlContent}</voice></speak>`;
-
-      console.log(`[getAudioChunk] attempt ${attempt}, text length: ${text.length}, voice: ${voiceName}`);
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: endpoint.t,
-          "Content-Type": "application/ssml+xml",
-          "User-Agent": "okhttp/4.5.0",
-          "X-Microsoft-OutputFormat": outputFormat,
-        },
-        body: ssml,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Edge TTS API error: ${response.status} ${errorText}`);
-      }
-
-      const blob = await response.blob();
-      
-      // 检查返回的音频是否为空
-      if (blob.size === 0) {
-        throw new Error(`Empty audio response from Edge TTS (attempt ${attempt})`);
-      }
-
-      console.log(`[getAudioChunk] success, size: ${blob.size} bytes`);
-      return blob;
-
-    } catch (error) {
-      lastError = error;
-      console.error(`[getAudioChunk] attempt ${attempt} failed:`, error.message);
-      
-      // 如果不是最后一次尝试，等待一下再重试
-      if (attempt < 3) {
-        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
-      }
-    }
+  // 添加语音风格和强度
+  if (style && style !== "general") {
+    const styleAttributes =
+      styleDegree !== 1.0 ? ` styledegree="${styleDegree}"` : "";
+    ssmlContent = `<mstts:express-as style="${style}"${styleAttributes}>${ssmlContent}</mstts:express-as>`;
   }
 
-  // 如果所有重试都失败，抛出最后一个错误
-  throw new Error(`Failed to get audio chunk after 3 attempts: ${lastError.message}`);
+  // 添加角色扮演
+  if (role) {
+    ssmlContent = `<mstts:express-as role="${role}">${ssmlContent}</mstts:express-as>`;
+  }
+
+  const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}">${ssmlContent}</voice></speak>`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: endpoint.t,
+      "Content-Type": "application/ssml+xml",
+      "User-Agent": "okhttp/4.5.0",
+      "X-Microsoft-OutputFormat": outputFormat,
+    },
+    body: ssml,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Edge TTS API error: ${response.status} ${errorText}`);
+  }
+  return response.blob();
 }
 
 async function getEndpoint() {
@@ -1678,30 +1608,15 @@ function getRealtimeSharePageHTML(metadata, id) {
           mediaSource.addEventListener('sourceopen', () => {
             const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
             const reader = response.body.getReader();
-            let firstChunkAt = 0;
-            let receivedBytes = 0;
-            console.log('[client-stream] sourceopen; stream header:', {
-              contentType: response.headers.get('Content-Type'),
-              xStream: response.headers.get('X-Stream'),
-              cacheControl: response.headers.get('Cache-Control')
-            });
-
             const pump = () => {
               reader.read().then(({ done, value }) => {
                 if (done) {
-                  console.log('[client-stream] done; totalBytes=', receivedBytes);
                   if (!sourceBuffer.updating) mediaSource.endOfStream();
                   audioLoaded = true;
                   button.textContent = '🎵 点击播放语音';
                   button.disabled = false;
-                  console.log(\`Total time from click to play: \${Date.now() - startTime}ms\`);
                   return;
                 }
-                if (!firstChunkAt) {
-                  firstChunkAt = Date.now();
-                  console.log('[client-stream] first chunk in', firstChunkAt - startTime, 'ms');
-                }
-                receivedBytes += value.byteLength;
                 const append = () => sourceBuffer.appendBuffer(value);
                 if (sourceBuffer.updating) {
                   sourceBuffer.addEventListener('updateend', append, { once: true });
@@ -1709,14 +1624,14 @@ function getRealtimeSharePageHTML(metadata, id) {
                   append();
                 }
               }).catch(err => {
-                console.error('[client-stream] reader error', err);
+                console.error('Stream error:', err);
                 try { mediaSource.endOfStream('network'); } catch (_) {}
                 button.textContent = '❌ 生成失败';
                 button.disabled = false;
               });
             };
-            sourceBuffer.addEventListener('error', (e) => console.error('[client-stream] sourceBuffer error', e));
-            mediaSource.addEventListener('error', (e) => console.error('[client-stream] mediaSource error', e));
+            sourceBuffer.addEventListener('error', (e) => console.error('SourceBuffer error:', e));
+            mediaSource.addEventListener('error', (e) => console.error('MediaSource error:', e));
             sourceBuffer.addEventListener('updateend', pump);
             pump();
           }, { once: true });
