@@ -2640,30 +2640,8 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
                 pump();
                 
                 // 流式播放完成后的保存逻辑
-                mediaSource.addEventListener('sourceended', async () => {
-                  // 对于流式播放，我们需要重新获取完整的音频数据来保存
-                  if (elements.saveToHistory.checked) {
-                    try {
-                      // 重新请求标准模式来获取完整音频文件用于保存
-                      const saveRequestBody = { ...requestBody, stream: false };
-                      const saveResponse = await fetch(\`\${elements.baseUrl.value}/v1/audio/speech\`, {
-                        method: "POST",
-                        headers: { "Authorization": \`Bearer \` + apiKey, "Content-Type": "application/json" },
-                        body: JSON.stringify(saveRequestBody),
-                      });
-                      if (saveResponse.ok) {
-                        const saveBlob = await saveResponse.blob();
-                        await saveToHistory(saveRequestBody, saveBlob);
-                      }
-                    } catch (error) {
-                      console.error('Save after streaming failed:', error);
-                    }
-                  }
-                  
-                  if (elements.saveAsRealtime.checked) {
-                    await saveAsRealtimePlay(requestBody);
-                  }
-                }, { once: true });
+                // 流式播放完成，不自动保存
+                // 保存功能由"直接保存"按钮单独处理
               }, { once: true });
             } else {
               const blob = await response.blob();
@@ -2673,17 +2651,8 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
               elements.audioPlayer.play();
               updateStatus("语音生成成功！", "success");
               
-              // 根据用户选择的保存模式进行保存
-              if (elements.saveToHistory.checked) {
-                // 保存到历史记录 (文本+声音文件)
-                await saveToHistory(requestBody, blob);
-              }
-              
-              if (elements.saveAsRealtime.checked) {
-                // 保存为实时播放 (文本+播放脚本)
-                await saveAsRealtimePlay(requestBody);
-              }
-              // 如果都没选择，就只生成语音不保存
+              // 生成语音按钮只负责生成和播放，不自动保存
+              // 保存功能由"直接保存"按钮单独处理
             }
 
           } catch (error) {
