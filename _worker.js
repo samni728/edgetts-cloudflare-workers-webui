@@ -1,7 +1,7 @@
 /**
  * A Cloudflare Worker for proxying Microsoft Edge's TTS service with embedded WebUI.
  *
- * @version 7.0.0 (UI & Auth Fix - Final)
+ * @version 1.2.0 (Stable Release)
  * @description This version fixes the API key validation logic, restores the cURL example,
  * corrects UI alignment, and enables the streaming functionality. It's the definitive release.
  */
@@ -2229,7 +2229,7 @@ function getWebUIHTML() {
   </head>
   <body>
     <main class="container">
-      <h1>CF-TTS Proxy Server (v1.1)</h1>
+      <h1>CF-TTS Proxy Server (v1.2)</h1>
       <details id="api-config" open>
         <summary>API 配置</summary>
         <div class="form-group" style="margin-top: 1rem">
