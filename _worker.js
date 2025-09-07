@@ -909,6 +909,11 @@ async function getVoiceStream(
         totalChunks: chunkIndex,
         totalMs: Date.now() - startedAt,
       });
+      
+      // 如果总字节数为0，记录警告
+      if (totalBytes === 0) {
+        console.warn("[stream] WARNING: Stream completed with 0 bytes - this indicates a potential issue");
+      }
     }
   })();
 
@@ -932,47 +937,76 @@ async function getAudioChunk(
   styleDegree,
   outputFormat
 ) {
-  const endpoint = await getEndpoint();
-  const url = `https://${endpoint.r}.tts.speech.microsoft.com/cognitiveservices/v1`;
+  // 重试机制：最多重试3次
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const endpoint = await getEndpoint();
+      const url = `https://${endpoint.r}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
-  // 构建高级SSML
-  const escapedText = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+      // 构建高级SSML
+      const escapedText = text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
 
-  let ssmlContent = `<prosody rate="${rate}%" pitch="${pitch}%">${escapedText}</prosody>`;
+      let ssmlContent = `<prosody rate="${rate}%" pitch="${pitch}%">${escapedText}</prosody>`;
 
-  // 添加语音风格和强度
-  if (style && style !== "general") {
-    const styleAttributes =
-      styleDegree !== 1.0 ? ` styledegree="${styleDegree}"` : "";
-    ssmlContent = `<mstts:express-as style="${style}"${styleAttributes}>${ssmlContent}</mstts:express-as>`;
+      // 添加语音风格和强度
+      if (style && style !== "general") {
+        const styleAttributes =
+          styleDegree !== 1.0 ? ` styledegree="${styleDegree}"` : "";
+        ssmlContent = `<mstts:express-as style="${style}"${styleAttributes}>${ssmlContent}</mstts:express-as>`;
+      }
+
+      // 添加角色扮演
+      if (role) {
+        ssmlContent = `<mstts:express-as role="${role}">${ssmlContent}</mstts:express-as>`;
+      }
+
+      const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}">${ssmlContent}</voice></speak>`;
+
+      console.log(`[getAudioChunk] attempt ${attempt}, text length: ${text.length}, voice: ${voiceName}`);
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: endpoint.t,
+          "Content-Type": "application/ssml+xml",
+          "User-Agent": "okhttp/4.5.0",
+          "X-Microsoft-OutputFormat": outputFormat,
+        },
+        body: ssml,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Edge TTS API error: ${response.status} ${errorText}`);
+      }
+
+      const blob = await response.blob();
+      
+      // 检查返回的音频是否为空
+      if (blob.size === 0) {
+        throw new Error(`Empty audio response from Edge TTS (attempt ${attempt})`);
+      }
+
+      console.log(`[getAudioChunk] success, size: ${blob.size} bytes`);
+      return blob;
+
+    } catch (error) {
+      lastError = error;
+      console.error(`[getAudioChunk] attempt ${attempt} failed:`, error.message);
+      
+      // 如果不是最后一次尝试，等待一下再重试
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      }
+    }
   }
 
-  // 添加角色扮演
-  if (role) {
-    ssmlContent = `<mstts:express-as role="${role}">${ssmlContent}</mstts:express-as>`;
-  }
-
-  const ssml = `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}">${ssmlContent}</voice></speak>`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: endpoint.t,
-      "Content-Type": "application/ssml+xml",
-      "User-Agent": "okhttp/4.5.0",
-      "X-Microsoft-OutputFormat": outputFormat,
-    },
-    body: ssml,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Edge TTS API error: ${response.status} ${errorText}`);
-  }
-  return response.blob();
+  // 如果所有重试都失败，抛出最后一个错误
+  throw new Error(`Failed to get audio chunk after 3 attempts: ${lastError.message}`);
 }
 
 async function getEndpoint() {
