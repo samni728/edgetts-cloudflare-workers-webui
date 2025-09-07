@@ -23,6 +23,28 @@ const OPENAI_VOICE_MAP = {
 let tokenInfo = { endpoint: null, token: null, expiredAt: null };
 const TOKEN_REFRESH_BEFORE_EXPIRY = 5 * 60;
 
+// 基于域名生成唯一的用户ID
+function generateUserIdFromDomain(requestUrl) {
+  try {
+    const url = new URL(requestUrl);
+    const domain = url.hostname;
+    // 使用简单的哈希算法生成16位十六进制用户ID
+    let hash = 0;
+    for (let i = 0; i < domain.length; i++) {
+      const char = domain.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // 转换为32位整数
+    }
+    // 转换为16位十六进制字符串，确保为正数
+    return Math.abs(hash).toString(16).padStart(8, '0') + 
+           Math.abs(hash * 31).toString(16).padStart(8, '0');
+  } catch (error) {
+    // 如果解析失败，使用默认值
+    console.warn('Failed to generate userId from domain, using default:', error);
+    return "0f04d16a175c411e";
+  }
+}
+
 // =================================================================================
 // Cloudflare Pages Entry Point
 // =================================================================================
@@ -763,7 +785,8 @@ async function handleSpeechRequest(request) {
       style,
       role,
       styleDegree,
-      outputFormat
+      outputFormat,
+      request
     );
   } else {
     return await getVoice(
@@ -774,7 +797,8 @@ async function handleSpeechRequest(request) {
       style,
       role,
       styleDegree,
-      outputFormat
+      outputFormat,
+      request
     );
   }
 }
@@ -812,7 +836,8 @@ async function getVoice(
   style,
   role,
   styleDegree,
-  outputFormat
+  outputFormat,
+  request
 ) {
   const maxChunkSize = 2000;
   const chunks = [];
@@ -829,7 +854,8 @@ async function getVoice(
         style,
         role,
         styleDegree,
-        outputFormat
+        outputFormat,
+        request
       )
     )
   );
@@ -847,7 +873,8 @@ async function getVoiceStream(
   style,
   role,
   styleDegree,
-  outputFormat
+  outputFormat,
+  request
 ) {
   const maxChunkSize = 2000;
   const chunks = [];
@@ -869,7 +896,8 @@ async function getVoiceStream(
           style,
           role,
           styleDegree,
-          outputFormat
+          outputFormat,
+          request
         );
         const arrayBuffer = await audioBlob.arrayBuffer();
         await writer.write(new Uint8Array(arrayBuffer));
@@ -894,9 +922,10 @@ async function getAudioChunk(
   style,
   role,
   styleDegree,
-  outputFormat
+  outputFormat,
+  request
 ) {
-  const endpoint = await getEndpoint();
+  const endpoint = await getEndpoint(request);
   const url = `https://${endpoint.r}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
   // 构建高级SSML
@@ -939,7 +968,7 @@ async function getAudioChunk(
   return response.blob();
 }
 
-async function getEndpoint() {
+async function getEndpoint(request) {
   const now = Date.now() / 1000;
   if (
     tokenInfo.token &&
@@ -951,6 +980,7 @@ async function getEndpoint() {
   const endpointUrl =
     "https://dev.microsofttranslator.com/apps/endpoint?api-version=1.0";
   const clientId = crypto.randomUUID().replace(/-/g, "");
+  const userId = generateUserIdFromDomain(request.url);
 
   // 重试机制
   let lastError;
@@ -961,7 +991,7 @@ async function getEndpoint() {
         headers: {
           "Accept-Language": "zh-Hans",
           "X-ClientVersion": "4.0.530a 5fe1dc6c",
-          "X-UserId": "0f04d16a175c411e",
+          "X-UserId": userId,
           "X-HomeGeographicRegion": "zh-Hans-CN",
           "X-ClientTraceId": clientId,
           "X-MT-Signature": await sign(endpointUrl),
