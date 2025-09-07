@@ -63,14 +63,82 @@ async function handleRequest(request) {
   }
 
   if (url.pathname.startsWith("/v1/")) {
-    if (globalThis.API_KEY) {
-      const authHeader = request.headers.get("authorization");
-      if (
-        !authHeader ||
-        !authHeader.startsWith("Bearer ") ||
-        authHeader.slice(7) !== globalThis.API_KEY
-      ) {
-        return errorResponse("Invalid API key.", 401, "invalid_api_key");
+    const authHeader = request.headers.get("authorization");
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return errorResponse(
+        "Missing or invalid authorization header.",
+        401,
+        "invalid_api_key"
+      );
+    }
+
+    const providedKey = authHeader.slice(7);
+
+    // 检查是否为分享UUID
+    if (providedKey.startsWith("share_")) {
+      const shareUUID = providedKey.replace("share_", "");
+      console.log("Share UUID validation for:", shareUUID);
+
+      if (!globalThis.TTS_HISTORY) {
+        return errorResponse("KV storage not configured", 500, "storage_error");
+      }
+
+      try {
+        const shareAuthData = await globalThis.TTS_HISTORY.get(
+          `share_auth_${shareUUID}`
+        );
+        if (!shareAuthData) {
+          console.log("Share UUID not found");
+          return errorResponse("Invalid share UUID.", 403, "invalid_api_key");
+        }
+
+        // 解析请求体以验证内容哈希
+        const requestBody = await request.clone().json();
+        const shareData = {
+          text: requestBody.input,
+          voice: requestBody.voice,
+          speed: requestBody.speed,
+          pitch: requestBody.pitch,
+          style: requestBody.style,
+          role: requestBody.role,
+          styleDegree: requestBody.styleDegree,
+          cleaningOptions: requestBody.cleaning_options,
+        };
+
+        const contentString = JSON.stringify(shareData);
+        const contentHash = await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(contentString)
+        );
+        const hashArray = Array.from(new Uint8Array(contentHash));
+
+        const authData = JSON.parse(shareAuthData);
+        const storedHash = authData.contentHash;
+
+        // 比较哈希值
+        if (JSON.stringify(hashArray) !== JSON.stringify(storedHash)) {
+          console.log("Content hash mismatch");
+          return errorResponse(
+            "Content validation failed.",
+            403,
+            "invalid_content"
+          );
+        }
+
+        console.log("Share UUID validation passed");
+      } catch (error) {
+        console.log("Share UUID validation error:", error);
+        return errorResponse(
+          "Share validation failed.",
+          403,
+          "validation_error"
+        );
+      }
+    } else if (globalThis.API_KEY) {
+      // 常规API Key验证
+      if (providedKey !== globalThis.API_KEY) {
+        return errorResponse("Invalid API key.", 403, "invalid_api_key");
       }
     }
   }
@@ -80,9 +148,14 @@ async function handleRequest(request) {
       return await handleSpeechRequest(request);
     if (url.pathname === "/v1/models") return handleModelsRequest();
     if (url.pathname === "/history") return await handleHistoryRequest(request);
+    if (/^\/share\/[^/]+\/auth$/.test(url.pathname))
+      return await handleShareAuthRequest(request);
     if (url.pathname.startsWith("/share/"))
       return await handleShareRequest(request);
+    if (url.pathname === "/play") return await handlePlayPageRequest(request);
     if (url.pathname === "/api/save") return await handleSaveRequest(request);
+    if (url.pathname === "/api/save-realtime")
+      return await handleSaveRealtimeRequest(request);
     if (url.pathname === "/api/history")
       return await handleHistoryApiRequest(request);
     if (url.pathname === "/api/set-password")
@@ -101,6 +174,103 @@ async function handleRequest(request) {
 // =================================================================================
 // API Route Handlers
 // =================================================================================
+
+// Handle save realtime play to history
+async function handleSaveRealtimeRequest(request) {
+  if (request.method !== "POST") {
+    return errorResponse("Method Not Allowed", 405, "method_not_allowed");
+  }
+
+  if (!globalThis.TTS_HISTORY) {
+    return errorResponse("KV storage not configured", 500, "storage_error");
+  }
+
+  try {
+    const realtimeData = await request.json();
+
+    if (!realtimeData.text) {
+      return errorResponse("Missing required fields", 400, "invalid_request");
+    }
+
+    // Generate unique ID
+    const id = crypto.randomUUID();
+    const shareUUID = crypto.randomUUID();
+    const timestamp = Date.now();
+
+    // 创建用于哈希的内容数据
+    const shareData = {
+      text: realtimeData.text,
+      voice: realtimeData.voice,
+      speed: realtimeData.speed,
+      pitch: realtimeData.pitch,
+      style: realtimeData.style,
+      role: realtimeData.role,
+      styleDegree: realtimeData.styleDegree,
+      cleaningOptions: realtimeData.cleaningOptions,
+    };
+
+    // 生成内容哈希
+    const contentString = JSON.stringify(shareData);
+    const contentHash = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(contentString)
+    );
+    const hashArray = Array.from(new Uint8Array(contentHash));
+
+    // Create metadata for realtime play
+    const metadata = {
+      id,
+      shareUUID, // 添加分享UUID
+      text: realtimeData.text,
+      voice: realtimeData.voice,
+      speed: realtimeData.speed,
+      pitch: realtimeData.pitch,
+      style: realtimeData.style,
+      role: realtimeData.role,
+      styleDegree: realtimeData.styleDegree,
+      cleaningOptions: realtimeData.cleaningOptions,
+      timestamp,
+      summary:
+        realtimeData.text.substring(0, 100) +
+        (realtimeData.text.length > 100 ? "..." : ""),
+      type: "realtime", // 标记为实时播放类型
+      size: 0, // 实时播放不存储音频文件
+    };
+
+    // Save metadata only (no audio file)
+    await globalThis.TTS_HISTORY.put(`meta_${id}`, JSON.stringify(metadata), {
+      metadata: { type: "realtime", timestamp },
+    });
+
+    // 保存分享授权数据
+    await globalThis.TTS_HISTORY.put(
+      `share_auth_${shareUUID}`,
+      JSON.stringify({
+        contentHash: hashArray,
+        shareData: shareData,
+      }),
+      {
+        metadata: { type: "share_auth", timestamp },
+      }
+    );
+
+    // Update history index
+    await updateHistoryIndex(id, metadata);
+
+    return new Response(
+      JSON.stringify({ success: true, id, shareUrl: `/share/${id}` }),
+      {
+        headers: { "Content-Type": "application/json", ...makeCORSHeaders() },
+      }
+    );
+  } catch (error) {
+    return errorResponse(
+      `Save realtime failed: ${error.message}`,
+      500,
+      "save_error"
+    );
+  }
+}
 
 // Handle save TTS to history
 async function handleSaveRequest(request) {
@@ -318,11 +488,47 @@ async function handleDeleteRequest(request) {
   }
 }
 
+// Handle play page (page sharing)
+async function handlePlayPageRequest(request) {
+  const url = new URL(request.url);
+  const params = url.searchParams;
+
+  // 获取分享参数
+  const text = params.get("text");
+  const voice = params.get("voice") || "alloy";
+  const speed = parseFloat(params.get("speed")) || 1.0;
+  const pitch = parseFloat(params.get("pitch")) || 1.0;
+  const style = params.get("style") || "general";
+  const role = params.get("role") || "";
+  const styleDegree = parseFloat(params.get("styleDegree")) || 1.0;
+
+  if (!text) {
+    return errorResponse("Missing text parameter", 400, "invalid_request");
+  }
+
+  return new Response(
+    getPlayPageHTML({
+      text: decodeURIComponent(text),
+      voice,
+      speed,
+      pitch,
+      style,
+      role,
+      styleDegree,
+    }),
+    {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    }
+  );
+}
+
 // Handle share page
 async function handleShareRequest(request) {
   const url = new URL(request.url);
   const id = url.pathname.split("/")[2];
   const providedPassword = url.searchParams.get("pwd");
+  const cookieHeader = request.headers.get("Cookie") || "";
+  const cookies = parseCookies(cookieHeader);
 
   if (!id || !globalThis.TTS_HISTORY) {
     return errorResponse("Invalid share link", 404, "not_found");
@@ -338,21 +544,43 @@ async function handleShareRequest(request) {
 
     // Check password protection
     if (metadata.password) {
-      if (!providedPassword || providedPassword !== metadata.password) {
+      const cookieName = `share_auth_${id}`;
+      const authorized = cookies[cookieName] === "1";
+      if (!authorized) {
+        // 兼容旧链接：?pwd= 正确则下发 Cookie 并重定向到干净链接
+        if (providedPassword && providedPassword === metadata.password) {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location: `/share/${id}`,
+              "Set-Cookie": `${cookieName}=1; Max-Age=604800; Path=/share/${id}; HttpOnly; SameSite=Lax; Secure`,
+              ...makeCORSHeaders(),
+            },
+          });
+        }
         return new Response(getPasswordPageHTML(id), {
           headers: { "Content-Type": "text/html; charset=utf-8" },
         });
       }
     }
 
-    const audioData = await globalThis.TTS_HISTORY.get(`audio_${id}`);
-    if (!audioData) {
-      return errorResponse("Audio data not found", 404, "not_found");
-    }
+    // 检查是否为实时播放类型
+    if (metadata.type === "realtime") {
+      // 实时播放类型，返回实时播放页面
+      return new Response(getRealtimeSharePageHTML(metadata, id), {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    } else {
+      // 传统类型，需要音频文件
+      const audioData = await globalThis.TTS_HISTORY.get(`audio_${id}`);
+      if (!audioData) {
+        return errorResponse("Audio data not found", 404, "not_found");
+      }
 
-    return new Response(getSharePageHTML(metadata, id), {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-    });
+      return new Response(getSharePageHTML(metadata, id), {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
   } catch (error) {
     return errorResponse(
       `Failed to load share page: ${error.message}`,
@@ -360,6 +588,69 @@ async function handleShareRequest(request) {
       "share_error"
     );
   }
+}
+
+// Handle share page auth (set cookie)
+async function handleShareAuthRequest(request) {
+  if (request.method !== "POST") {
+    return errorResponse("Method Not Allowed", 405, "method_not_allowed");
+  }
+  const url = new URL(request.url);
+  const id = url.pathname.split("/")[2];
+  if (!id || !globalThis.TTS_HISTORY) {
+    return errorResponse("Invalid share link", 404, "not_found");
+  }
+  try {
+    const metadataStr = await globalThis.TTS_HISTORY.get(`meta_${id}`);
+    if (!metadataStr) {
+      return errorResponse("Share link not found", 404, "not_found");
+    }
+    const metadata = JSON.parse(metadataStr);
+    if (!metadata.password) {
+      // 无密码直接通过
+      return new Response(null, {
+        status: 204,
+        headers: { ...makeCORSHeaders() },
+      });
+    }
+    const contentType = request.headers.get("Content-Type") || "";
+    let password = "";
+    if (contentType.includes("application/json")) {
+      const body = await request.json().catch(() => ({}));
+      password = body.password || "";
+    } else if (contentType.includes("application/x-www-form-urlencoded")) {
+      const form = await request.formData();
+      password = form.get("password") || "";
+    }
+    if (password !== metadata.password) {
+      return errorResponse("Invalid password", 401, "unauthorized");
+    }
+    const cookieName = `share_auth_${id}`;
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Set-Cookie": `${cookieName}=1; Max-Age=604800; Path=/share/${id}; HttpOnly; SameSite=Lax; Secure`,
+        ...makeCORSHeaders(),
+      },
+    });
+  } catch (error) {
+    return errorResponse(`Auth failed: ${error.message}`, 500, "auth_error");
+  }
+}
+
+function parseCookies(cookieHeader) {
+  const out = {};
+  if (!cookieHeader) return out;
+  const parts = cookieHeader.split(";");
+  for (const part of parts) {
+    const idx = part.indexOf("=");
+    if (idx > -1) {
+      const k = part.slice(0, idx).trim();
+      const v = part.slice(idx + 1).trim();
+      out[k] = decodeURIComponent(v);
+    }
+  }
+  return out;
 }
 
 // Handle audio file serving
@@ -567,9 +858,24 @@ async function getVoiceStream(
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
 
+  const startedAt = Date.now();
+  let totalBytes = 0;
+  let chunkIndex = 0;
+  console.log("[stream] start", {
+    chunks: chunks.length,
+    voiceName,
+    rate,
+    pitch,
+    style,
+    role,
+    styleDegree,
+    outputFormat,
+  });
+
   (async () => {
     try {
       for (const chunk of chunks) {
+        const t0 = Date.now();
         const audioBlob = await getAudioChunk(
           chunk,
           voiceName,
@@ -582,16 +888,37 @@ async function getVoiceStream(
         );
         const arrayBuffer = await audioBlob.arrayBuffer();
         await writer.write(new Uint8Array(arrayBuffer));
+        totalBytes += arrayBuffer.byteLength;
+        console.log("[stream] chunk", {
+          index: ++chunkIndex,
+          bytes: arrayBuffer.byteLength,
+          elapsedMs: Date.now() - t0,
+          totalBytes,
+        });
       }
     } catch (error) {
+      console.error(
+        "[stream] error",
+        error && (error.stack || error.message || error)
+      );
       await writer.abort(error);
     } finally {
       await writer.close();
+      console.log("[stream] end", {
+        totalBytes,
+        totalChunks: chunkIndex,
+        totalMs: Date.now() - startedAt,
+      });
     }
   })();
 
   return new Response(readable, {
-    headers: { "Content-Type": "audio/mpeg", ...makeCORSHeaders() },
+    headers: {
+      "Content-Type": "audio/mpeg",
+      "Cache-Control": "no-store",
+      "X-Stream": "1",
+      ...makeCORSHeaders(),
+    },
   });
 }
 
@@ -774,6 +1101,7 @@ async function updateHistoryIndex(id, metadata) {
       voice: metadata.voice,
       size: metadata.size,
       hasPassword: !!metadata.password,
+      type: metadata.type || "stored", // 添加类型信息
     });
 
     // Keep only last 1000 items for performance
@@ -959,17 +1287,14 @@ function getPasswordPageHTML(id) {
   <title>访问受限 - 需要密码</title>
   <style>
     :root { --primary-color: #007bff; --light-gray: #f8f9fa; --gray: #6c757d; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--light-gray); color: #343a40; line-height: 1.6; margin: 0; padding: 2rem; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-    .container { max-width: 400px; background-color: #ffffff; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08); text-align: center; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--light-gray); color: #343a40; line-height: 1.8; margin: 0; padding: 1rem; }
+    .container { max-width: 520px; margin: 8vh auto 0; background-color: #ffffff; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08); text-align: center; }
     .lock-icon { font-size: 3rem; margin-bottom: 1rem; }
-    h1 { color: #333; margin-bottom: 1rem; }
-    p { color: var(--gray); margin-bottom: 2rem; }
-    .form-group { margin-bottom: 1.5rem; text-align: left; }
-    label { display: block; margin-bottom: 0.5rem; font-weight: 600; }
-    input[type="password"] { width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 6px; font-size: 1rem; box-sizing: border-box; }
-    .btn { background-color: var(--primary-color); color: white; border: none; padding: 0.75rem 2rem; border-radius: 6px; font-size: 1rem; cursor: pointer; width: 100%; }
-    .btn:hover { background-color: #0056b3; }
-    .error { color: #dc3545; margin-top: 1rem; display: none; }
+    .form-group { margin: 1rem 0; text-align: left; }
+    label { display: block; margin-bottom: 0.5rem; color: #333; }
+    input { width: 100%; padding: 0.6rem 0.8rem; border: 1px solid #dee2e6; border-radius: 6px; font-size: 1rem; }
+    .btn { width: 100%; margin-top: 0.8rem; background-color: var(--primary-color); color: white; border: none; padding: 0.7rem; border-radius: 6px; cursor: pointer; }
+    .error { display: none; color: #dc3545; margin-top: 0.8rem; }
   </style>
 </head>
 <body>
@@ -988,20 +1313,402 @@ function getPasswordPageHTML(id) {
     
     <div id="error" class="error">密码错误，请重试</div>
   </div>
-
+ 
   <script>
-    document.getElementById('password-form').addEventListener('submit', function(e) {
+    document.getElementById('password-form').addEventListener('submit', async function(e) {
       e.preventDefault();
       const password = document.getElementById('password').value;
-      if (password) {
-        window.location.href = '/share/${id}?pwd=' + encodeURIComponent(password);
+      if (!password) return;
+      try {
+        const res = await fetch('/share/${id}/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        if (res.ok) {
+          window.location.href = '/share/${id}';
+        } else {
+          document.getElementById('error').style.display = 'block';
+        }
+      } catch (err) {
+        document.getElementById('error').style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function getPlayPageHTML(config) {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TTS 实时播放 - ${config.text.substring(0, 50)}${
+    config.text.length > 50 ? "..." : ""
+  }</title>
+  <meta name="description" content="${config.text.substring(0, 100)}">
+  <style>
+    :root { --primary-color: #007bff; --success-color: #28a745; --light-gray: #f8f9fa; --gray: #6c757d; --border-color: #dee2e6; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--light-gray); color: #343a40; line-height: 1.8; margin: 0; padding: 1rem; }
+    .container { max-width: 800px; margin: 0 auto; background-color: #ffffff; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08); }
+    .header { text-align: center; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-color); }
+    .title { font-size: 1.5rem; font-weight: 700; color: #333; margin-bottom: 0.5rem; }
+    .voice-info { font-size: 0.9rem; color: var(--gray); }
+    .content { margin: 2rem 0; }
+    .content h1, .content h2, .content h3 { color: #333; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+    .content h1 { font-size: 1.8rem; border-bottom: 2px solid var(--primary-color); padding-bottom: 0.5rem; }
+    .content p { margin-bottom: 1rem; }
+    .content strong { font-weight: 600; }
+    .play-section { background-color: var(--light-gray); padding: 1rem; border-radius: 8px; margin: 1.5rem 0; text-align: center; }
+    .play-button { background-color: var(--success-color); color: white; border: none; padding: 0.8rem 2rem; border-radius: 25px; font-size: 1rem; cursor: pointer; margin-bottom: 0.8rem; }
+    .play-button:hover { background-color: #218838; }
+    .play-button:disabled { background-color: var(--gray); cursor: not-allowed; }
+    .audio-player { width: 100%; margin-top: 0.8rem; display: none; }
+    .footer { text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border-color); }
+    @media (max-width: 768px) {
+      body { padding: 0; }
+      .container { padding: 1rem; margin: 0; border-radius: 0; box-shadow: none; }
+      .title { font-size: 1.3rem; }
+      .play-section { padding: 0.8rem; margin: 1rem 0; }
+      .play-button { padding: 0.6rem 1.5rem; font-size: 0.9rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">🎵 TTS 实时播放</div>
+      <div class="voice-info">
+        音色：${config.voice} | 语速：${config.speed}x | 音调：${config.pitch}
+      </div>
+    </div>
+    
+    <div class="play-section">
+      <button class="play-button" onclick="playAudio()">
+        🎵 点击播放语音
+      </button>
+      <div id="device-info" style="font-size: 0.85rem; color: var(--gray); margin-top: 0.5rem;"></div>
+      <audio id="audioPlayer" class="audio-player" controls></audio>
+    </div>
+    
+    <div class="content">
+      ${renderMarkdown(config.text)}
+    </div>
+    
+    <div class="footer">
+      <a href="/" style="color: var(--gray); text-decoration: none;">← 返回 TTS 服务</a>
+    </div>
+  </div>
+
+  <script>
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    let audioLoaded = false;
+    
+    // 显示设备信息
+    document.addEventListener('DOMContentLoaded', () => {
+      const deviceInfo = document.getElementById('device-info');
+      if (isMobile) {
+        deviceInfo.textContent = '📱 移动端检测：将使用标准播放模式，请耐心等待语音生成';
+      } else {
+        deviceInfo.textContent = '🖥️ PC端检测：将使用流式播放模式，可快速开始播放';
       }
     });
     
-    // 检查URL参数，如果有错误密码则显示错误信息
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('error') === 'invalid_password') {
-      document.getElementById('error').style.display = 'block';
+    async function playAudio() {
+      const audio = document.getElementById('audioPlayer');
+      const button = document.querySelector('.play-button');
+      
+      if (audioLoaded) {
+        try {
+          audio.style.display = 'block';
+          await audio.play();
+        } catch (error) {
+          alert('播放失败: ' + error.message);
+        }
+        return;
+      }
+      
+      button.textContent = '⏳ 正在生成语音...';
+      button.disabled = true;
+      
+      try {
+        const requestBody = {
+          model: "tts-1",
+          voice: "${config.voice}",
+          input: ${JSON.stringify(config.text)},
+          speed: ${config.speed},
+          pitch: ${config.pitch},
+          style: "${config.style}",
+          role: "${config.role}",
+          styleDegree: ${config.styleDegree},
+          stream: !isMobile,
+          cleaning_options: {
+            remove_markdown: true,
+            remove_emoji: true,
+            remove_urls: true,
+            remove_line_breaks: true,
+            remove_citation_numbers: true
+          }
+        };
+        
+        const response = await fetch('/v1/audio/speech', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: { message: \`服务器错误: \${response.statusText}\` } }));
+          throw new Error(errorData.error.message);
+        }
+        
+        const blob = await response.blob();
+        if (blob.size === 0) throw new Error('音频文件为空');
+        
+        audio.src = URL.createObjectURL(blob);
+        audioLoaded = true;
+        button.textContent = '🎵 点击播放语音';
+        button.disabled = false;
+        
+        audio.style.display = 'block';
+        await audio.play();
+        
+      } catch (error) {
+        button.textContent = '❌ 生成失败';
+        button.disabled = false;
+        alert('语音生成失败: ' + error.message);
+      }
+    }
+  </script>
+</body>
+</html>`;
+}
+
+function getRealtimeSharePageHTML(metadata, id) {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TTS 实时播放 - ${metadata.summary}</title>
+  <meta name="description" content="${metadata.summary}">
+  <style>
+    :root { --primary-color: #007bff; --success-color: #28a745; --light-gray: #f8f9fa; --gray: #6c757d; --border-color: #dee2e6; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--light-gray); color: #343a40; line-height: 1.8; margin: 0; padding: 1rem; }
+    .container { max-width: 800px; margin: 0 auto; background-color: #ffffff; padding: 2rem; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08); }
+    .header { text-align: center; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-color); }
+    .title { font-size: 1.5rem; font-weight: 700; color: #333; margin-bottom: 0.5rem; }
+    .meta { font-size: 0.9rem; color: var(--gray); }
+    .content { margin: 2rem 0; }
+    .content h1, .content h2, .content h3 { color: #333; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+    .content h1 { font-size: 1.8rem; border-bottom: 2px solid var(--primary-color); padding-bottom: 0.5rem; }
+    .content p { margin-bottom: 1rem; }
+    .content strong { font-weight: 600; }
+    .play-section { background-color: var(--light-gray); padding: 1rem; border-radius: 8px; margin: 1.5rem 0; text-align: center; }
+    .play-button { background-color: var(--success-color); color: white; border: none; padding: 0.8rem 2rem; border-radius: 25px; font-size: 1rem; cursor: pointer; margin-bottom: 0.8rem; }
+    .play-button:hover { background-color: #218838; }
+    .play-button:disabled { background-color: var(--gray); cursor: not-allowed; }
+    .device-info { font-size: 0.85rem; color: var(--gray); margin-top: 0.5rem; }
+    .audio-player { width: 100%; margin-top: 0.8rem; display: none; }
+    .footer { text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border-color); }
+    @media (max-width: 768px) {
+      body { padding: 0; }
+      .container { padding: 1rem; margin: 0; border-radius: 0; box-shadow: none; }
+      .title { font-size: 1.3rem; }
+      .play-section { padding: 0.8rem; margin: 1rem 0; }
+      .play-button { padding: 0.6rem 1.5rem; font-size: 0.9rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">🎵 TTS 实时播放分享</div>
+      <div class="meta">
+        ${formatDate(metadata.timestamp)} • ${metadata.voice} • 实时生成
+      </div>
+    </div>
+    
+    <div class="play-section">
+      <button class="play-button" onclick="playAudio()">
+        🎵 点击播放语音
+      </button>
+      <div class="device-info" id="device-info"></div>
+      <audio id="audioPlayer" class="audio-player" controls></audio>
+    </div>
+    
+    <div class="content">
+      ${renderMarkdown(metadata.text)}
+    </div>
+    
+    <div class="footer">
+      <div style="margin-bottom: 1rem;">
+        <a href="/" style="color: var(--gray); text-decoration: none;">← 返回 TTS 服务</a>
+      </div>
+      <div style="padding-top: 1rem; border-top: 1px solid var(--border-color); font-size: 0.85rem; color: var(--gray);">
+        <div style="display: flex; justify-content: center; align-items: center; gap: 1rem; flex-wrap: wrap;">
+          <a href="https://github.com/samni728/edgetts-cloudflare-workers-webui" target="_blank" style="display: flex; align-items: center; gap: 0.5rem; color: var(--gray); text-decoration: none;">
+            <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            GitHub 项目
+          </a>
+          <span>|</span>
+          <a href="https://github.com/samni728/edgetts-cloudflare-workers-webui" target="_blank" style="color: var(--gray); text-decoration: none;">⭐ Star</a>
+        </div>
+        <div style="margin-top: 0.5rem; font-size: 0.8rem;">
+          Powered by Edge TTS & Cloudflare Pages
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    let audioLoaded = false;
+    
+    // 显示设备信息
+    document.addEventListener('DOMContentLoaded', () => {
+      const deviceInfo = document.getElementById('device-info');
+      if (isMobile) {
+        deviceInfo.textContent = '📱 移动端检测：将使用标准播放模式，请耐心等待语音生成';
+      } else {
+        deviceInfo.textContent = '🖥️ PC端检测：将使用流式播放模式，可快速开始播放';
+      }
+    });
+    
+    async function playAudio() {
+      const audio = document.getElementById('audioPlayer');
+      const button = document.querySelector('.play-button');
+      
+      if (audioLoaded) {
+        try {
+          audio.style.display = 'block';
+          await audio.play();
+        } catch (error) {
+          alert('播放失败: ' + error.message);
+        }
+        return;
+      }
+      
+      const isStreaming = !isMobile;
+      button.textContent = isStreaming ? '⏳ 正在启动流式播放...' : '⏳ 正在生成语音...';
+      button.disabled = true;
+      
+      try {
+        const requestBody = {
+          model: "tts-1",
+          voice: "${metadata.voice}",
+          input: ${JSON.stringify(metadata.text)},
+          speed: ${metadata.speed},
+          pitch: ${metadata.pitch},
+          style: "${metadata.style || "general"}",
+          role: "${metadata.role || ""}",
+          styleDegree: ${metadata.styleDegree || 1.0},
+          stream: isStreaming,
+          cleaning_options: ${JSON.stringify(metadata.cleaningOptions || {})}
+        };
+        
+        console.log('Device detection:', { isMobile, isStreaming });
+        console.log('Request body:', requestBody);
+        
+        const startTime = Date.now();
+        
+        const response = await fetch('/v1/audio/speech', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer share_${metadata.shareUUID}'
+          },
+          body: JSON.stringify(requestBody)
+        });
+        
+        const responseTime = Date.now() - startTime;
+        console.log(\`Response received in \${responseTime}ms, streaming: \${isStreaming}\`);
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: { message: \`服务器错误: \${response.statusText}\` } }));
+          throw new Error(errorData.error.message);
+        }
+        
+        if (isStreaming) {
+          // 使用 MediaSource 进行真正的流式播放
+          button.textContent = '⏳ 正在处理流式数据...';
+          const mediaSource = new MediaSource();
+          audio.src = URL.createObjectURL(mediaSource);
+          audio.style.display = 'block';
+          audio.play().catch(() => {});
+
+          mediaSource.addEventListener('sourceopen', () => {
+            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+            const reader = response.body.getReader();
+            let firstChunkAt = 0;
+            let receivedBytes = 0;
+            console.log('[client-stream] sourceopen; stream header:', {
+              contentType: response.headers.get('Content-Type'),
+              xStream: response.headers.get('X-Stream'),
+              cacheControl: response.headers.get('Cache-Control')
+            });
+
+            const pump = () => {
+              reader.read().then(({ done, value }) => {
+                if (done) {
+                  console.log('[client-stream] done; totalBytes=', receivedBytes);
+                  if (!sourceBuffer.updating) mediaSource.endOfStream();
+                  audioLoaded = true;
+                  button.textContent = '🎵 点击播放语音';
+                  button.disabled = false;
+                  console.log(\`Total time from click to play: \${Date.now() - startTime}ms\`);
+                  return;
+                }
+                if (!firstChunkAt) {
+                  firstChunkAt = Date.now();
+                  console.log('[client-stream] first chunk in', firstChunkAt - startTime, 'ms');
+                }
+                receivedBytes += value.byteLength;
+                const append = () => sourceBuffer.appendBuffer(value);
+                if (sourceBuffer.updating) {
+                  sourceBuffer.addEventListener('updateend', append, { once: true });
+                } else {
+                  append();
+                }
+              }).catch(err => {
+                console.error('[client-stream] reader error', err);
+                try { mediaSource.endOfStream('network'); } catch (_) {}
+                button.textContent = '❌ 生成失败';
+                button.disabled = false;
+              });
+            };
+            sourceBuffer.addEventListener('error', (e) => console.error('[client-stream] sourceBuffer error', e));
+            mediaSource.addEventListener('error', (e) => console.error('[client-stream] mediaSource error', e));
+            sourceBuffer.addEventListener('updateend', pump);
+            pump();
+          }, { once: true });
+        } else {
+          const blob = await response.blob();
+          if (blob.size === 0) throw new Error('音频文件为空');
+
+          const totalTime = Date.now() - startTime;
+          console.log(\`Audio ready in \${totalTime}ms, size: \${blob.size} bytes\`);
+
+          audio.src = URL.createObjectURL(blob);
+          audioLoaded = true;
+          button.textContent = '🎵 点击播放语音';
+          button.disabled = false;
+
+          audio.style.display = 'block';
+          await audio.play();
+
+          console.log(\`Total time from click to play: \${Date.now() - startTime}ms\`);
+        }
+        
+      } catch (error) {
+        button.textContent = '❌ 生成失败';
+        button.disabled = false;
+        alert('语音生成失败: ' + error.message);
+      }
     }
   </script>
 </body>
@@ -1167,7 +1874,12 @@ function getSharePageHTML(metadata, id) {
     }
     
     function copyLink() {
-      navigator.clipboard.writeText(window.location.href).then(() => {
+      // 移除URL中的密码参数，确保分享链接不包含密码
+      const url = new URL(window.location.href);
+      url.searchParams.delete('pwd'); // 移除密码参数
+      const cleanUrl = url.toString();
+      
+      navigator.clipboard.writeText(cleanUrl).then(() => {
         const btn = document.querySelector('.share-copy');
         const originalText = btn.textContent;
         btn.textContent = '✅ 已复制';
@@ -1175,7 +1887,7 @@ function getSharePageHTML(metadata, id) {
           btn.textContent = originalText;
         }, 2000);
       }).catch(() => {
-        prompt('复制链接:', window.location.href);
+        prompt('复制链接:', cleanUrl);
       });
     }
   </script>
@@ -1273,10 +1985,11 @@ function getHistoryPageHTML() {
                 <div class="item-meta">
                   \${formatDate(item.timestamp)} • \${item.voice} • \${formatFileSize(item.size)}
                   \${item.hasPassword ? ' • 🔒 已设密码' : ''}
+                  \${item.type === 'realtime' ? ' • 🌐 实时播放' : ' • 💾 预存储'}
                 </div>
               </div>
               <div class="item-actions">
-                <button class="btn btn-play" onclick="playAudio('\${item.id}')" title="播放">
+                <button class="btn btn-play" onclick="playAudio('\${item.id}', '\${item.type || 'stored'}')" title="播放">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M8 5v14l11-7z"/>
                   </svg>
@@ -1320,9 +2033,9 @@ function getHistoryPageHTML() {
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
     
-    async function playAudio(id) {
+    async function playAudio(id, type = 'stored') {
       const audio = document.getElementById(\`audio-\${id}\`);
-      const button = document.querySelector(\`[onclick="playAudio('\${id}')"]\`);
+      const button = document.querySelector(\`[onclick*="playAudio('\${id}'"]\`);
       
       if (audio.src) {
         try {
@@ -1336,40 +2049,48 @@ function getHistoryPageHTML() {
       }
       
       // 更新按钮状态
-      const originalText = button.textContent;
-      button.textContent = '⏳ 加载中...';
+      const originalText = button.innerHTML; // 使用innerHTML保存SVG图标
+      button.innerHTML = '⏳';
       button.disabled = true;
       
       try {
-        const response = await fetch(\`/api/audio/\${id}\`);
-        if (response.ok) {
-          const blob = await response.blob();
-          
-          // 验证 blob 是否有效
-          if (blob.size === 0) {
-            throw new Error('音频文件为空');
-          }
-          
-          audio.src = URL.createObjectURL(blob);
-          
-          // 添加错误处理
-          audio.addEventListener('error', (e) => {
-            console.error('Audio error:', e);
-            alert('音频播放失败，请重试');
-          }, { once: true });
-          
-          audio.style.display = 'block';
-          await audio.play();
-          
-          button.textContent = originalText;
+        if (type === 'realtime') {
+          // 实时播放类型：直接跳转到分享页面
+          window.open(\`/share/\${id}\`, '_blank');
+          button.innerHTML = originalText;
           button.disabled = false;
         } else {
-          const errorText = await response.text();
-          throw new Error(\`HTTP \${response.status}: \${errorText}\`);
+          // 预存储类型：从API获取音频文件
+          const response = await fetch(\`/api/audio/\${id}\`);
+          if (response.ok) {
+            const blob = await response.blob();
+            
+            // 验证 blob 是否有效
+            if (blob.size === 0) {
+              throw new Error('音频文件为空');
+            }
+            
+            audio.src = URL.createObjectURL(blob);
+            
+            // 添加错误处理
+            audio.addEventListener('error', (e) => {
+              console.error('Audio error:', e);
+              alert('音频播放失败，请重试');
+            }, { once: true });
+            
+            audio.style.display = 'block';
+            await audio.play();
+            
+            button.innerHTML = originalText;
+            button.disabled = false;
+          } else {
+            const errorText = await response.text();
+            throw new Error(\`HTTP \${response.status}: \${errorText}\`);
+          }
         }
       } catch (error) {
         console.error('Audio loading error:', error);
-        button.textContent = originalText;
+        button.innerHTML = originalText;
         button.disabled = false;
         alert('播放失败: ' + error.message);
       }
@@ -1577,7 +2298,12 @@ function getWebUIHTML() {
           <div class="form-group">
             <label for="customVoiceName">自定义音色名称 (ShortName)</label>
             <input type="text" id="customVoiceName" placeholder="例如: zh-CN-XiaoxiaoNeural" />
-            <small style="color: #666; font-size: 0.85rem; display: block; margin-top: 0.3rem;">完整的音色标识符，如 zh-CN-XiaoxiaoNeural</small>
+            <small style="color: #666; font-size: 0.85rem; display: block; margin-top: 0.3rem;">
+              完整的音色标识符，如 zh-CN-XiaoxiaoNeural 
+              <a href="https://learn.microsoft.com/zh-cn/azure/ai-services/speech-service/language-support?tabs=tts#multilingual-voices" target="_blank" style="color: var(--primary-color); text-decoration: none; margin-left: 0.5rem;">
+                📋 查看完整音色列表
+              </a>
+            </small>
           </div>
           <div class="grid-layout" style="margin-top: 1rem;">
             <div class="form-group">
@@ -1655,10 +2381,21 @@ function getWebUIHTML() {
       </details>
       <div class="action-section">
         <div style="margin-bottom: 1rem;">
-          <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: normal;">
-            <input type="checkbox" id="saveToHistory" style="width: auto; margin: 0;" />
-            保存到历史记录 (可分享)
-          </label>
+          <div style="display: flex; gap: 2rem; flex-wrap: wrap; margin-bottom: 0.8rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: normal;">
+              <input type="checkbox" id="saveToHistory" style="width: auto; margin: 0;" />
+              保存历史记录 (文本+录音)
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: normal;">
+              <input type="checkbox" id="saveAsRealtime" style="width: auto; margin: 0;" />
+              保存实时播放 (文本+流播放)
+            </label>
+          </div>
+          <div id="direct-save-buttons" style="display: none; text-align: center;">
+            <button id="btn-direct-save" style="background-color: #17a2b8; color: white; padding: 0.6rem 1.5rem; border: none; border-radius: 6px; cursor: pointer;">
+              💾 直接保存到历史记录
+            </button>
+          </div>
         </div>
         
         <div class="all-buttons">
@@ -1733,6 +2470,9 @@ function getWebUIHTML() {
           removeCitation: document.getElementById("removeCitation"),
           customKeywords: document.getElementById("customKeywords"),
           saveToHistory: document.getElementById("saveToHistory"),
+          saveAsRealtime: document.getElementById("saveAsRealtime"),
+          directSaveButtons: document.getElementById("direct-save-buttons"),
+          btnDirectSave: document.getElementById("btn-direct-save"),
           customVoiceConfig: document.getElementById("custom-voice-config"),
           customVoiceName: document.getElementById("customVoiceName"),
           voiceStyle: document.getElementById("voiceStyle"),
@@ -1949,6 +2689,32 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
                 };
                 sourceBuffer.addEventListener("updateend", pump);
                 pump();
+                
+                // 流式播放完成后的保存逻辑
+                mediaSource.addEventListener('sourceended', async () => {
+                  // 对于流式播放，我们需要重新获取完整的音频数据来保存
+                  if (elements.saveToHistory.checked) {
+                    try {
+                      // 重新请求标准模式来获取完整音频文件用于保存
+                      const saveRequestBody = { ...requestBody, stream: false };
+                      const saveResponse = await fetch(\`\${elements.baseUrl.value}/v1/audio/speech\`, {
+                        method: "POST",
+                        headers: { "Authorization": \`Bearer \` + apiKey, "Content-Type": "application/json" },
+                        body: JSON.stringify(saveRequestBody),
+                      });
+                      if (saveResponse.ok) {
+                        const saveBlob = await saveResponse.blob();
+                        await saveToHistory(saveRequestBody, saveBlob);
+                      }
+                    } catch (error) {
+                      console.error('Save after streaming failed:', error);
+                    }
+                  }
+                  
+                  if (elements.saveAsRealtime.checked) {
+                    await saveAsRealtimePlay(requestBody);
+                  }
+                }, { once: true });
               }, { once: true });
             } else {
               const blob = await response.blob();
@@ -1958,10 +2724,17 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
               elements.audioPlayer.play();
               updateStatus("语音生成成功！", "success");
               
-              // Save to history if checkbox is checked
+              // 根据用户选择的保存模式进行保存
               if (elements.saveToHistory.checked) {
+                // 保存到历史记录 (文本+声音文件)
                 await saveToHistory(requestBody, blob);
               }
+              
+              if (elements.saveAsRealtime.checked) {
+                // 保存为实时播放 (文本+播放脚本)
+                await saveAsRealtimePlay(requestBody);
+              }
+              // 如果都没选择，就只生成语音不保存
             }
 
           } catch (error) {
@@ -2007,6 +2780,79 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
           return btoa(binary);
         };
 
+        // Save as realtime play function
+        const saveAsRealtimePlay = async (requestBody) => {
+          try {
+            updateStatus("正在保存为实时播放...", "info", true);
+            
+            const voiceConfig = getVoiceConfig();
+            
+            // 创建实时播放的元数据（不包含音频文件）
+            const realtimeData = {
+              text: requestBody.input,
+              voice: voiceConfig.voice,
+              speed: requestBody.speed,
+              pitch: requestBody.pitch,
+              style: voiceConfig.style,
+              role: voiceConfig.role,
+              styleDegree: voiceConfig.styleDegree,
+              cleaningOptions: requestBody.cleaning_options,
+              type: 'realtime' // 标记为实时播放类型
+            };
+            
+            const response = await fetch('/api/save-realtime', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(realtimeData)
+            });
+            
+            if (response.ok) {
+              const result = await response.json();
+              const deviceInfo = isMobile ? '移动端将使用标准播放模式' : 'PC端将使用流式播放模式';
+              updateStatus(\`✅ 实时播放已保存！\${deviceInfo}，分享链接: \${window.location.origin}\${result.shareUrl}\`, "success");
+            } else {
+              const errorData = await response.json().catch(() => ({}));
+              throw new Error(errorData.error?.message || '保存失败');
+            }
+          } catch (error) {
+            updateStatus(\`保存实时播放失败: \${error.message}\`, "error");
+          }
+        };
+
+        // Generate realtime play link function (deprecated)
+        const generateRealtimePlayLink = (requestBody) => {
+          try {
+            const voiceConfig = getVoiceConfig();
+            const shareParams = {
+              text: encodeURIComponent(requestBody.input),
+              voice: voiceConfig.voice,
+              speed: requestBody.speed,
+              pitch: requestBody.pitch,
+              style: voiceConfig.style,
+              role: voiceConfig.role,
+              styleDegree: voiceConfig.styleDegree
+            };
+            
+            const shareUrl = \`\${window.location.origin}/play?\${new URLSearchParams(shareParams)}\`;
+            
+            // 设备检测和用户提示
+            const deviceInfo = isMobile ? '移动端将使用标准播放模式' : 'PC端将使用流式播放模式';
+            
+            // 复制到剪贴板并显示友好提示
+            navigator.clipboard.writeText(shareUrl).then(() => {
+              updateStatus(\`🔗 实时播放链接已复制！\${deviceInfo}，接收者需耐心等待语音生成\`, "success");
+              console.log('Realtime play URL:', shareUrl);
+            }).catch(() => {
+              // 如果复制失败，显示链接让用户手动复制
+              updateStatus(\`🔗 实时播放链接生成成功！\${deviceInfo}\`, "success");
+              prompt('实时播放链接（按需生成）:', shareUrl);
+            });
+            
+          } catch (error) {
+            updateStatus(\`生成分享链接失败: \${error.message}\`, "error");
+          }
+        };
+
         // Save to history function
         const saveToHistory = async (requestBody, audioBlob) => {
           try {
@@ -2041,19 +2887,121 @@ curl --location '\${baseUrl}/v1/audio/speech' \\\\
         // Event listeners
         elements.btnGenerate.addEventListener("click", () => generateSpeech(false));
         elements.btnStream.addEventListener("click", () => generateSpeech(true));
-        elements.btnHistory.addEventListener("click", () => {
+        elements.btnHistory.addEventListener("click", async () => {
           const apiKey = getCookie("apiKey");
           if (!apiKey) {
             updateStatus("请先设置 API Key 才能查看历史记录", "error");
             elements.apiConfig.open = true;
             return;
           }
-          window.open('/history', '_blank');
+          
+          // 验证API Key是否有效
+          try {
+            const response = await fetch('/api/history', {
+              headers: { 'Authorization': \`Bearer \${apiKey}\` }
+            });
+            
+            if (!response.ok) {
+              updateStatus("API Key 无效，无法访问历史记录", "error");
+              elements.apiConfig.open = true;
+              return;
+            }
+            
+            window.open('/history', '_blank');
+          } catch (error) {
+            updateStatus("验证 API Key 失败，请检查网络连接", "error");
+          }
         });
         
         // 使用提示事件监听
         elements.dismissTips.addEventListener("click", hideUsageTips);
         elements.confirmTips.addEventListener("click", hideUsageTips);
+        
+        // 保存选项互斥逻辑：勾选时二选一，并显示/隐藏直接保存按钮
+        const updateDirectSaveButton = () => {
+          const showButton = elements.saveToHistory.checked || elements.saveAsRealtime.checked;
+          elements.directSaveButtons.style.display = showButton ? 'block' : 'none';
+        };
+        
+        elements.saveToHistory.addEventListener("change", () => {
+          if (elements.saveToHistory.checked && elements.saveAsRealtime.checked) {
+            elements.saveAsRealtime.checked = false;
+          }
+          updateDirectSaveButton();
+        });
+        
+        elements.saveAsRealtime.addEventListener("change", () => {
+          if (elements.saveAsRealtime.checked && elements.saveToHistory.checked) {
+            elements.saveToHistory.checked = false;
+          }
+          updateDirectSaveButton();
+        });
+        
+        // 直接保存按钮点击事件
+        elements.btnDirectSave.addEventListener("click", async () => {
+          const apiKey = elements.apiKey.value.trim();
+          const text = elements.inputText.value.trim();
+
+          if (!apiKey) {
+            updateStatus("请先在 API 配置中输入 API Key", "error");
+            elements.apiConfig.open = true;
+            return;
+          }
+          if (!text) {
+            updateStatus("请输入要合成的文本", "error");
+            return;
+          }
+
+          const voiceConfig = getVoiceConfig();
+          const requestBody = {
+            model: "tts-1",
+            input: text,
+            voice: voiceConfig.voice,
+            speed: parseFloat(elements.speed.value),
+            pitch: parseFloat(elements.pitch.value),
+            style: voiceConfig.style,
+            role: voiceConfig.role,
+            styleDegree: voiceConfig.styleDegree,
+            stream: false, // 直接保存使用标准模式
+            cleaning_options: {
+              remove_markdown: elements.removeMarkdown.checked,
+              remove_emoji: elements.removeEmoji.checked,
+              remove_urls: elements.removeUrls.checked,
+              remove_line_breaks: elements.removeLineBreaks.checked,
+              remove_citation_numbers: elements.removeCitation.checked,
+              custom_keywords: elements.customKeywords.value,
+            },
+          };
+
+          try {
+            updateStatus("正在直接保存到历史记录...", "info", true);
+            
+            if (elements.saveToHistory.checked) {
+              // 生成音频并保存到历史记录
+              const response = await fetch(\`\${elements.baseUrl.value}/v1/audio/speech\`, {
+                method: "POST",
+                headers: { "Authorization": \`Bearer \` + apiKey, "Content-Type": "application/json" },
+                body: JSON.stringify(requestBody),
+              });
+              
+              if (response.ok) {
+                const blob = await response.blob();
+                await saveToHistory(requestBody, blob);
+              } else {
+                throw new Error('生成音频失败');
+              }
+            }
+            
+            if (elements.saveAsRealtime.checked) {
+              // 直接保存为实时播放
+              await saveAsRealtimePlay(requestBody);
+            }
+            
+          } catch (error) {
+            updateStatus(\`直接保存失败: \${error.message}\`, "error");
+          }
+        });
+        
         elements.copyCurl.addEventListener("click", () => {
           navigator.clipboard.writeText(elements.curlCode.textContent).then(() => {
             elements.copyCurl.textContent = "已复制!";

@@ -205,26 +205,26 @@ Use `Bearer Token` authentication method. Put your API Key in the `Authorization
 
 ### Request Body Parameters (`JSON`)
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `model` | `string` | `"tts-1"` | Model ID. Standard format: `tts-1`, `tts-1-hd`. Compatible format: `tts-1-alloy`, etc. |
-| `input` | `string` | **Required** | Text to be converted to speech. **Supports any length**. |
-| `voice` | `string` | `"alloy"` | Voice selection. Supports OpenAI format (`shimmer`, `alloy`, `fable`, `onyx`, `nova`, `echo`) or Microsoft native voice names. |
-| `speed` | `number` | `1.0` | Speech rate. Range from 0.25 to 2.0. |
-| `pitch` | `number` | `1.0` | Pitch. Range from 0.5 to 1.5. |
-| `style` | `string` | `"general"` | Voice style. Supports `cheerful`, `sad`, `angry`, `friendly` and 14 other styles. |
-| `role` | `string` | `""` | Role play. Supports `Girl`, `Boy`, `YoungAdultFemale` and 8 other roles. |
-| `styleDegree` | `number` | `1.0` | Style intensity. Range from 0.01 to 2.0, controls the intensity of voice style. |
-| `stream` | `boolean` | `false` | Whether to use streaming response. Set to `true` to significantly reduce first-play latency for long texts. |
-| `concurrency` | `number` | `10` | Number of concurrent requests. Controls how many text chunk requests are sent to Microsoft servers simultaneously. |
-| `chunk_size` | `number` | `300` | Text chunk size (character count). Worker will automatically adjust this value based on platform limits to ensure success. |
-| `cleaning_options` | `object` | `{...}` | An object containing text cleaning switches. |
-| `├ remove_markdown` | `boolean` | `true` | Whether to remove Markdown formatting. |
-| `├ remove_emoji` | `boolean` | `true` | Whether to remove Emoji. |
-| `├ remove_urls` | `boolean` | `true` | Whether to remove URLs. |
-| `├ remove_line_breaks` | `boolean` | `false` | Whether to remove all line breaks. |
-| `├ remove_citation_numbers` | `boolean` | `true` | Whether to intelligently remove citation markers. |
-| `├ custom_keywords` | `string` | `""` | Custom keywords to remove, separated by commas. |
+| Parameter                   | Type      | Default      | Description                                                                                                                    |
+| --------------------------- | --------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `model`                     | `string`  | `"tts-1"`    | Model ID. Standard format: `tts-1`, `tts-1-hd`. Compatible format: `tts-1-alloy`, etc.                                         |
+| `input`                     | `string`  | **Required** | Text to be converted to speech. **Supports any length**.                                                                       |
+| `voice`                     | `string`  | `"alloy"`    | Voice selection. Supports OpenAI format (`shimmer`, `alloy`, `fable`, `onyx`, `nova`, `echo`) or Microsoft native voice names. |
+| `speed`                     | `number`  | `1.0`        | Speech rate. Range from 0.25 to 2.0.                                                                                           |
+| `pitch`                     | `number`  | `1.0`        | Pitch. Range from 0.5 to 1.5.                                                                                                  |
+| `style`                     | `string`  | `"general"`  | Voice style. Supports `cheerful`, `sad`, `angry`, `friendly` and 14 other styles.                                              |
+| `role`                      | `string`  | `""`         | Role play. Supports `Girl`, `Boy`, `YoungAdultFemale` and 8 other roles.                                                       |
+| `styleDegree`               | `number`  | `1.0`        | Style intensity. Range from 0.01 to 2.0, controls the intensity of voice style.                                                |
+| `stream`                    | `boolean` | `false`      | Whether to use streaming response. Set to `true` to significantly reduce first-play latency for long texts.                    |
+| `concurrency`               | `number`  | `10`         | Number of concurrent requests. Controls how many text chunk requests are sent to Microsoft servers simultaneously.             |
+| `chunk_size`                | `number`  | `300`        | Text chunk size (character count). Worker will automatically adjust this value based on platform limits to ensure success.     |
+| `cleaning_options`          | `object`  | `{...}`      | An object containing text cleaning switches.                                                                                   |
+| `├ remove_markdown`         | `boolean` | `true`       | Whether to remove Markdown formatting.                                                                                         |
+| `├ remove_emoji`            | `boolean` | `true`       | Whether to remove Emoji.                                                                                                       |
+| `├ remove_urls`             | `boolean` | `true`       | Whether to remove URLs.                                                                                                        |
+| `├ remove_line_breaks`      | `boolean` | `false`      | Whether to remove all line breaks.                                                                                             |
+| `├ remove_citation_numbers` | `boolean` | `true`       | Whether to intelligently remove citation markers.                                                                              |
+| `├ custom_keywords`         | `string`  | `""`         | Custom keywords to remove, separated by commas.                                                                                |
 
 ### 🎵 Voice Selection Guide
 

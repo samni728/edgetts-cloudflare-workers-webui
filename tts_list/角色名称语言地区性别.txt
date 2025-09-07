@@ -1,11 +1,20 @@
 角色名称	语言	地区	性别
 
+<<<<<<< HEAD
 支持情绪控制的（并非所有情绪）
+=======
+
+支持情绪控制的（并非所有情绪）可以在自定义 或者 api 中使用
+>>>>>>> 0704c17 (修改了项目的 TTS 列表参考地址)
 英语模型
 en-US-Aria24kEnglish：女性声音模型，适用于英语。
 en-US-Zira24kEnglish：女性声音模型，适用于英语。
 en-US-Benjamin24kEnglish：男性声音模型，适用于英语。
 中文模型
+<<<<<<< HEAD
+=======
+zh-CN-XiaomoNeural
+>>>>>>> 0704c17 (修改了项目的 TTS 列表参考地址)
 zh-CN-XiaoxiaoNeural：女性声音模型，适用于中文（简体）。
 zh-CN-KangkangNeural：男性声音模型，适用于中文（简体）。
 其他语言模型
@@ -14,7 +23,10 @@ es-ES-LauraNeural：女性声音模型，适用于西班牙语。
 fr-FR-JulieNeural：女性声音模型，适用于法语。
 ja-JP-AyumiNeural：女性声音模型，适用于日语。
 
+<<<<<<< HEAD
 以下是标准模型
+=======
+>>>>>>> 0704c17 (修改了项目的 TTS 列表参考地址)
 af-ZA-AdriNeural	阿非利卡语	南非	女性
 af-ZA-WillemNeural	阿非利卡语	南非	男性
 am-ET-AmehaNeural	阿姆哈拉语	埃塞俄比亚	男性
