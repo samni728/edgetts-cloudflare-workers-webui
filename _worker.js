@@ -32,15 +32,22 @@ function generateUserIdFromDomain(requestUrl) {
     let hash = 0;
     for (let i = 0; i < domain.length; i++) {
       const char = domain.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
+      hash = (hash << 5) - hash + char;
       hash = hash & hash; // 转换为32位整数
     }
     // 转换为16位十六进制字符串，确保为正数
-    return Math.abs(hash).toString(16).padStart(8, '0') + 
-           Math.abs(hash * 31).toString(16).padStart(8, '0');
+    return (
+      Math.abs(hash).toString(16).padStart(8, "0") +
+      Math.abs(hash * 31)
+        .toString(16)
+        .padStart(8, "0")
+    );
   } catch (error) {
     // 如果解析失败，使用默认值
-    console.warn('Failed to generate userId from domain, using default:', error);
+    console.warn(
+      "Failed to generate userId from domain, using default:",
+      error
+    );
     return "0f04d16a175c411e";
   }
 }
